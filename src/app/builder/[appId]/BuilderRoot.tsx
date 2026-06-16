@@ -8,6 +8,7 @@ import Button from '@/components/ui/Button';
 import WidgetPalette from '@/components/builder/WidgetPalette';
 import WidgetCard from '@/components/builder/WidgetCard';
 import PropertiesPanel from '@/components/builder/PropertiesPanel';
+import PreviewWidget from '@/components/builder/PreviewWidget';
 
 // ─── Widget defaults ──────────────────────────────────────────────────────────
 
@@ -110,6 +111,7 @@ export default function BuilderRoot() {
   const [appName, setAppName]           = useState(INITIAL_NAME);
   const [editingName, setEditingName]   = useState(false);
   const [saveStatus, setSaveStatus]     = useState<'saved' | 'saving'>('saved');
+  const [isPreview, setIsPreview]       = useState(false);
 
   const dragging      = useRef<DragState | null>(null);
   const saveTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -246,6 +248,52 @@ export default function BuilderRoot() {
 
   const selectedWidget = widgets.find(w => w.id === selectedId) ?? null;
 
+  // ── Preview mode ─────────────────────────────────────────────────────────
+
+  if (isPreview) {
+    return (
+      <div className="flex flex-col h-full min-h-screen bg-[#0d0d0d]">
+        <header className="h-[60px] shrink-0 flex items-center justify-between px-6 border-b border-[#2a2a2a] bg-[#161616]">
+          <div className="flex items-center gap-2.5">
+            <span className="text-[10px] font-semibold text-[#4b5563] uppercase tracking-widest">Preview</span>
+            <span className="text-[#3a3a3a] select-none">·</span>
+            <span className="text-sm font-medium text-[#f0f0f0]">{appName}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsPreview(false)}
+            className="flex items-center gap-1.5 text-sm text-[#6b7280] hover:text-[#f0f0f0] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8] rounded px-2 py-1"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+            Back to Editor
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-auto">
+          {widgets.length === 0 ? (
+            <div className="flex items-center justify-center h-full min-h-[400px]">
+              <p className="text-sm text-[#4b5563]">No widgets on the canvas yet.</p>
+            </div>
+          ) : (
+            <div className="relative" style={{ minWidth: 1000, minHeight: 720 }}>
+              {widgets.map(w => (
+                <div
+                  key={w.id}
+                  className="absolute"
+                  style={{ left: w.x, top: w.y, width: w.w, minHeight: w.h }}
+                >
+                  <PreviewWidget widget={w} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
@@ -341,6 +389,13 @@ export default function BuilderRoot() {
             >
               Reset
             </button>
+
+            <Button variant="outline" size="sm" onClick={() => setIsPreview(true)}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+              Preview
+            </Button>
 
             <Button size="sm">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
