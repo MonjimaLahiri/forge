@@ -1,51 +1,33 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect, startTransition } from 'react';
 import Link from 'next/link';
 import type { Widget, WidgetType } from '@/lib/types';
+import { saveDraft, loadDraft, clearDraft } from '@/lib/storage';
 import Button from '@/components/ui/Button';
 import WidgetPalette from '@/components/builder/WidgetPalette';
 import WidgetCard from '@/components/builder/WidgetCard';
 import PropertiesPanel from '@/components/builder/PropertiesPanel';
 
-// ─── Default props for each widget type ──────────────────────────────────────
+// ─── Widget defaults ──────────────────────────────────────────────────────────
 
 export type WidgetDefaults = Omit<Widget, 'id' | 'x' | 'y'>;
 
 export const WIDGET_DEFAULTS: Record<WidgetType, WidgetDefaults> = {
-  static_text: {
-    type: 'static_text', w: 280, h: 90,
-    title: 'Text Box',
-    content: 'Your text here',
-  },
-  input: {
-    type: 'input', w: 280, h: 80,
-    title: 'Input',
-    placeholder: 'Enter text…',
-  },
-  llm: {
-    type: 'llm', w: 300, h: 140,
-    title: 'AI Generator',
-    placeholder: 'Output will appear here…',
-    prompt: 'You are a helpful assistant.',
-    model: 'claude-sonnet-4-6',
-    temperature: 0.7,
-  },
-  image: {
-    type: 'image', w: 300, h: 160,
-    title: 'Image Generator',
-    imagePrompt: 'Describe the image you want to generate',
-    imageStyle: 'photorealistic',
-  },
-  chat: {
-    type: 'chat', w: 320, h: 260,
-    title: 'Chat',
-    placeholder: 'Type a message…',
-    prompt: 'You are a helpful assistant.',
-  },
+  static_text: { type: 'static_text', w: 280, h: 90,  title: 'Text Box',        content: 'Your text here' },
+  input:       { type: 'input',       w: 280, h: 80,  title: 'Input',            placeholder: 'Enter text…' },
+  llm:         { type: 'llm',         w: 300, h: 140, title: 'AI Generator',     placeholder: 'Output will appear here…', prompt: 'You are a helpful assistant.', model: 'claude-sonnet-4-6', temperature: 0.7 },
+  image:       { type: 'image',       w: 300, h: 160, title: 'Image Generator',  imagePrompt: 'Describe the image you want to generate', imageStyle: 'photorealistic' },
+  chat:        { type: 'chat',        w: 320, h: 260, title: 'Chat',             placeholder: 'Type a message…', prompt: 'You are a helpful assistant.' },
 };
 
-// ─── Drag state (stored in ref — no extra re-renders during drag) ─────────────
+// ─── Save/load baseline — used to detect unsaved changes ─────────────────────
+
+const INITIAL_NAME = 'Untitled App';
+// String value used as the "nothing saved yet" baseline for comparison
+const INITIAL_DRAFT_JSON = JSON.stringify({ name: INITIAL_NAME, widgets: [] });
+
+// ─── Drag state ───────────────────────────────────────────────────────────────
 
 interface DragState {
   widgetId: string;
@@ -57,10 +39,32 @@ interface DragState {
 
 // ─── ID generator ─────────────────────────────────────────────────────────────
 
-let _counter = 0;
-function genId() { return `w_${++_counter}`; }
+function genId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback: timestamp + random suffix (avoids counter reset on page reload)
+  return `w_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
-// ─── Empty canvas placeholder ─────────────────────────────────────────────────
+// ─── Duplicate-ID repair ──────────────────────────────────────────────────────
+
+function repairDuplicateIds(widgets: Widget[]): { widgets: Widget[]; idMap: Map<string, string> } {
+  const seen = new Set<string>();
+  const idMap = new Map<string, string>();
+  const fixed = widgets.map(w => {
+    if (seen.has(w.id)) {
+      const newId = genId();
+      idMap.set(w.id, newId);
+      return { ...w, id: newId };
+    }
+    seen.add(w.id);
+    return w;
+  });
+  return { widgets: fixed, idMap };
+}
+
+// ─── Empty canvas state ───────────────────────────────────────────────────────
 
 function EmptyCanvas() {
   return (
@@ -78,18 +82,101 @@ function EmptyCanvas() {
   );
 }
 
+// ─── Save status indicator ────────────────────────────────────────────────────
+
+function SaveIndicator({ status }: { status: 'saved' | 'saving' }) {
+  if (status === 'saving') {
+    return (
+      <span className="text-xs text-[#6b7280] tabular-nums" aria-live="polite">
+        Saving…
+      </span>
+    );
+  }
+  return (
+    <span className="text-xs text-[#4b5563] flex items-center gap-1" aria-live="polite">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polyline points="20 6 9 17 4 12" />
+      </svg>
+      Saved locally
+    </span>
+  );
+}
+
 // ─── BuilderRoot ──────────────────────────────────────────────────────────────
 
 export default function BuilderRoot() {
-  const [widgets, setWidgets]       = useState<Widget[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [appName, setAppName]       = useState('Untitled App');
-  const [editingName, setEditingName] = useState(false);
-  const dragging = useRef<DragState | null>(null);
+  const [widgets, setWidgets]           = useState<Widget[]>([]);
+  const [selectedId, setSelectedId]     = useState<string | null>(null);
+  const [appName, setAppName]           = useState(INITIAL_NAME);
+  const [editingName, setEditingName]   = useState(false);
+  const [saveStatus, setSaveStatus]     = useState<'saved' | 'saving'>('saved');
 
-  const selectedWidget = widgets.find(w => w.id === selectedId) ?? null;
+  const dragging      = useRef<DragState | null>(null);
+  const saveTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedJson = useRef(INITIAL_DRAFT_JSON);
 
-  // ── Widget operations ──────────────────────────────────────────────────────
+  // ── Load from localStorage after first render ────────────────────────────
+  // setState is inside startTransition callback (not directly in effect body)
+  // to satisfy the react-hooks/set-state-in-effect rule.
+  useEffect(() => {
+    const draft = loadDraft();
+    if (!draft) return;
+    const { widgets: safeWidgets, idMap } = repairDuplicateIds(draft.widgets);
+    startTransition(() => {
+      setWidgets(safeWidgets);
+      setAppName(draft.name);
+      // If a repaired widget happened to be selected, point to its new id
+      setSelectedId(prev => (prev !== null && idMap.has(prev)) ? (idMap.get(prev) ?? null) : prev);
+      lastSavedJson.current = JSON.stringify({ name: draft.name, widgets: safeWidgets });
+    });
+  }, []);
+
+  // ── Debounced auto-save whenever canvas changes ──────────────────────────
+
+  useEffect(() => {
+    const current = JSON.stringify({ name: appName, widgets });
+
+    // Nothing changed since last save — keep status 'saved' and skip
+    if (current === lastSavedJson.current) {
+      setSaveStatus('saved');
+      return;
+    }
+
+    setSaveStatus('saving');
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+
+    saveTimer.current = setTimeout(() => {
+      saveDraft({ name: appName, widgets });
+      lastSavedJson.current = current;
+      setSaveStatus('saved');
+    }, 500);
+
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [widgets, appName]);
+
+  // ── Keyboard shortcuts (Escape = deselect, Delete/Backspace = delete) ────
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement;
+      const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+
+      if (e.key === 'Escape') {
+        setSelectedId(null);
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !inInput && selectedId) {
+        setWidgets(prev => prev.filter(w => w.id !== selectedId));
+        setSelectedId(null);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedId]);
+
+  // ── Widget operations ────────────────────────────────────────────────────
 
   function addWidget(type: WidgetType) {
     const stagger = (widgets.length % 8) * 20;
@@ -112,7 +199,17 @@ export default function BuilderRoot() {
     setSelectedId(null);
   }
 
-  // ── Drag ──────────────────────────────────────────────────────────────────
+  function resetCanvas() {
+    if (!confirm('Clear the canvas and start over? This cannot be undone.')) return;
+    clearDraft();
+    setWidgets([]);
+    setAppName(INITIAL_NAME);
+    setSelectedId(null);
+    lastSavedJson.current = INITIAL_DRAFT_JSON;
+    setSaveStatus('saved');
+  }
+
+  // ── Drag ────────────────────────────────────────────────────────────────
 
   function onWidgetMouseDown(e: React.MouseEvent, widget: Widget) {
     e.preventDefault();
@@ -140,17 +237,18 @@ export default function BuilderRoot() {
     dragging.current = null;
   }
 
-  // ── Rename app (inline) ────────────────────────────────────────────────────
+  // ── App rename ───────────────────────────────────────────────────────────
 
   function commitName(value: string) {
     setAppName(value.trim() || appName);
     setEditingName(false);
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  const selectedWidget = widgets.find(w => w.id === selectedId) ?? null;
+
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
-    // Mouse handlers on outermost div so drag tracks even if cursor leaves the canvas
     <div
       className="flex h-full min-h-screen bg-[#0d0d0d] select-none"
       onMouseMove={onMouseMove}
@@ -159,10 +257,7 @@ export default function BuilderRoot() {
       {/* ── Left sidebar ── */}
       <aside className="flex flex-col w-60 shrink-0 h-full bg-[#161616] border-r border-[#2a2a2a]">
         <div className="h-[60px] flex items-center px-5 border-b border-[#2a2a2a]">
-          <Link
-            href="/dashboard"
-            className="inline-flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8] rounded"
-          >
+          <Link href="/dashboard" className="inline-flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8] rounded">
             <span className="text-[#f0f0f0] text-lg font-semibold tracking-tight">
               Forge<span className="text-[#1a73e8]">.</span>
             </span>
@@ -170,11 +265,11 @@ export default function BuilderRoot() {
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-0.5" aria-label="Builder navigation">
-          {[
-            { href: '/builder/new', label: 'App Builder', active: true },
-            { href: '/my-apps',    label: 'My Apps',      active: false },
+          {([
+            { href: '/builder/new', label: 'App Builder',  active: true  },
+            { href: '/my-apps',    label: 'My Apps',       active: false },
             { href: '/discover',   label: 'Discover Apps', active: false },
-          ].map(item => (
+          ] as const).map(item => (
             <Link
               key={item.href}
               href={item.href}
@@ -205,6 +300,8 @@ export default function BuilderRoot() {
 
         {/* Header */}
         <header className="h-[60px] flex items-center justify-between px-6 border-b border-[#2a2a2a] bg-[#161616] shrink-0">
+
+          {/* Left: app name + rename */}
           <div className="flex items-center gap-2 min-w-0">
             {editingName ? (
               <input
@@ -218,7 +315,7 @@ export default function BuilderRoot() {
                 }}
               />
             ) : (
-              <span className="text-sm font-medium text-[#f0f0f0] truncate">{appName}</span>
+              <span className="text-sm font-medium text-[#f0f0f0] truncate max-w-[160px]">{appName}</span>
             )}
             <button
               type="button"
@@ -233,20 +330,33 @@ export default function BuilderRoot() {
             </button>
           </div>
 
-          <Button size="sm">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
-              <polyline points="16 6 12 2 8 6" />
-              <line x1="12" y1="2" x2="12" y2="15" />
-            </svg>
-            Publish
-          </Button>
+          {/* Right: save status + reset + publish */}
+          <div className="flex items-center gap-4 shrink-0">
+            <SaveIndicator status={saveStatus} />
+
+            <button
+              type="button"
+              onClick={resetCanvas}
+              className="text-xs text-[#6b7280] hover:text-[#ef4444] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#ef4444] rounded px-1"
+            >
+              Reset
+            </button>
+
+            <Button size="sm">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                <polyline points="16 6 12 2 8 6" />
+                <line x1="12" y1="2" x2="12" y2="15" />
+              </svg>
+              Publish
+            </Button>
+          </div>
         </header>
 
         {/* Canvas + right panel */}
         <div className="flex-1 flex min-h-0">
 
-          {/* Canvas scroll container */}
+          {/* Canvas */}
           <div
             className="flex-1 overflow-auto"
             style={{
@@ -255,7 +365,6 @@ export default function BuilderRoot() {
             }}
             onClick={() => setSelectedId(null)}
           >
-            {/* Absolute coordinate space — widgets are placed within this */}
             <div className="relative" style={{ minWidth: 1000, minHeight: 720 }}>
               {widgets.length === 0 && <EmptyCanvas />}
               {widgets.map(w => (
@@ -270,7 +379,7 @@ export default function BuilderRoot() {
             </div>
           </div>
 
-          {/* Right panel — palette or properties */}
+          {/* Right panel */}
           <aside
             className="w-64 shrink-0 border-l border-[#2a2a2a] bg-[#161616] flex flex-col overflow-hidden"
             aria-label={selectedWidget ? 'Widget properties' : 'Widget palette'}
