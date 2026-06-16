@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import type { Widget } from '@/lib/types';
 
 interface Props {
@@ -45,6 +46,70 @@ const TYPE_LABEL: Record<Widget['type'], string> = {
   chat:        'Chat Box',
 };
 
+// ─── Widget ID chip — shown for every selected widget ─────────────────────────
+
+function WidgetIdChip({ id, isInput }: { id: string; isInput: boolean }) {
+  const [copied, setCopied] = useState(false);
+
+  function copy() {
+    navigator.clipboard.writeText(id).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[10px] font-semibold text-[#6b7280] uppercase tracking-wider">Widget ID</span>
+      <div className="flex items-center gap-1.5">
+        <code className="flex-1 min-w-0 text-[10px] text-[#9ca3af] bg-[#0d0d0d] border border-[#2a2a2a] rounded px-2 py-1 font-mono truncate">
+          {id}
+        </code>
+        <button
+          type="button"
+          onClick={copy}
+          aria-label={copied ? 'Copied' : 'Copy widget ID'}
+          className="shrink-0 text-[#6b7280] hover:text-[#f0f0f0] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#1a73e8] rounded"
+        >
+          {copied ? (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="13" height="13" rx="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          )}
+        </button>
+      </div>
+      {isInput ? (
+        <p className="text-[10px] text-[#6b7280] leading-snug">
+          Reference this input in a generator prompt:{' '}
+          <code className="text-[#9ca3af]">{`{{${id}.value}}`}</code>
+        </p>
+      ) : (
+        <p className="text-[10px] text-[#4b5563] leading-snug">
+          Use this ID in prompts like{' '}
+          <code className="text-[#6b7280]">{`{{${id}.value}}`}</code>
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Reference syntax hint (for generator widgets) ────────────────────────────
+
+function RefHint() {
+  return (
+    <p className="text-[10px] text-[#4b5563] leading-snug">
+      Tip: use{' '}
+      <code className="text-[#6b7280]">{'{{widgetId.value}}'}</code>{' '}
+      to insert a live input value. Find a widget&apos;s ID in its properties panel.
+    </p>
+  );
+}
+
 // ─── PropertiesPanel ──────────────────────────────────────────────────────────
 
 export default function PropertiesPanel({ widget, onChange, onBack, onDelete }: Props) {
@@ -87,7 +152,7 @@ export default function PropertiesPanel({ widget, onChange, onBack, onDelete }: 
       {/* Scrollable fields */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
 
-        {/* ── Common: title ─────────────────────────────────────────────── */}
+        {/* ── Common: title + widget ID ─────────────────────────────────── */}
         <Section title="General" />
         <Field label="Title">
           <input
@@ -98,6 +163,7 @@ export default function PropertiesPanel({ widget, onChange, onBack, onDelete }: 
             placeholder="Widget title"
           />
         </Field>
+        <WidgetIdChip id={widget.id} isInput={widget.type === 'input'} />
 
         {/* ── Static Text ───────────────────────────────────────────────── */}
         {widget.type === 'static_text' && (
@@ -148,6 +214,7 @@ export default function PropertiesPanel({ widget, onChange, onBack, onDelete }: 
               placeholder="You are a helpful assistant."
             />
           </Field>
+          <RefHint />
 
           <Field label="Model">
             <select
@@ -187,6 +254,7 @@ export default function PropertiesPanel({ widget, onChange, onBack, onDelete }: 
               placeholder="Describe the image you want to generate…"
             />
           </Field>
+          <RefHint />
 
           <Field label="Style">
             <select

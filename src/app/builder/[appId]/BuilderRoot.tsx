@@ -112,6 +112,7 @@ export default function BuilderRoot() {
   const [editingName, setEditingName]   = useState(false);
   const [saveStatus, setSaveStatus]     = useState<'saved' | 'saving'>('saved');
   const [isPreview, setIsPreview]       = useState(false);
+  const [runtimeValues, setRuntimeValues] = useState<Record<string, string>>({});
 
   const dragging      = useRef<DragState | null>(null);
   const saveTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -284,7 +285,13 @@ export default function BuilderRoot() {
                   className="absolute"
                   style={{ left: w.x, top: w.y, width: w.w, minHeight: w.h }}
                 >
-                  <PreviewWidget widget={w} />
+                  <PreviewWidget
+                    widget={w}
+                    runtimeValues={runtimeValues}
+                    onValueChange={(id, value) =>
+                      setRuntimeValues(prev => ({ ...prev, [id]: value }))
+                    }
+                  />
                 </div>
               ))}
             </div>

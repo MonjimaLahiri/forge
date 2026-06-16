@@ -2,6 +2,15 @@
 
 import { useState, useRef, useEffect } from 'react';
 import type { Widget } from '@/lib/types';
+import { resolvePrompt } from '@/lib/resolvePrompt';
+
+// ─── Shared props ─────────────────────────────────────────────────────────────
+
+interface SharedProps {
+  widget: Widget;
+  runtimeValues: Record<string, string>;
+  onValueChange: (id: string, value: string) => void;
+}
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
 
@@ -16,9 +25,22 @@ const BTN_PRIMARY =
   'hover:bg-[#1557b0] disabled:opacity-50 disabled:cursor-not-allowed ' +
   'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8]';
 
+// ─── Warning list ─────────────────────────────────────────────────────────────
+
+function WarningList({ warnings }: { warnings: string[] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <div className="rounded-lg bg-[#854d0e]/20 border border-[#854d0e]/40 px-3 py-2 space-y-1">
+      {warnings.map((w, i) => (
+        <p key={i} className="text-xs text-[#fbbf24] leading-snug">{w}</p>
+      ))}
+    </div>
+  );
+}
+
 // ─── Static Text ──────────────────────────────────────────────────────────────
 
-function StaticTextPreview({ widget }: { widget: Widget }) {
+function StaticTextPreview({ widget }: SharedProps) {
   return (
     <div className={CARD}>
       <div className={CARD_HEADER}>
@@ -35,8 +57,14 @@ function StaticTextPreview({ widget }: { widget: Widget }) {
 
 // ─── Input Box ────────────────────────────────────────────────────────────────
 
-function InputPreview({ widget }: { widget: Widget }) {
+function InputPreview({ widget, onValueChange }: SharedProps) {
   const [value, setValue] = useState('');
+
+  function handleChange(next: string) {
+    setValue(next);
+    onValueChange(widget.id, next);
+  }
+
   return (
     <div className={CARD}>
       <div className={CARD_HEADER}>
@@ -51,7 +79,7 @@ function InputPreview({ widget }: { widget: Widget }) {
           className={INPUT_STYLE}
           placeholder={widget.placeholder}
           value={value}
-          onChange={e => setValue(e.target.value)}
+          onChange={e => handleChange(e.target.value)}
         />
       </div>
     </div>
@@ -60,19 +88,24 @@ function InputPreview({ widget }: { widget: Widget }) {
 
 // ─── Text Generator (LLM) ─────────────────────────────────────────────────────
 
-function LLMPreview({ widget }: { widget: Widget }) {
-  const [userInput, setUserInput] = useState('');
-  const [output, setOutput]       = useState('');
-  const [loading, setLoading]     = useState(false);
+function LLMPreview({ widget, runtimeValues }: SharedProps) {
+  const [output, setOutput]     = useState('');
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [loading, setLoading]   = useState(false);
 
   function handleGenerate() {
     if (loading) return;
+    const template = widget.prompt ?? '';
+    const { resolved, warnings: w } = resolvePrompt(template, runtimeValues);
+    setWarnings(w);
     setLoading(true);
     setOutput('');
     setTimeout(() => {
-      setOutput(
-        'This is a mock AI response. Connect a real model to generate actual content based on your prompt.'
-      );
+      if (!resolved.trim()) {
+        setOutput('Add a system prompt to see output here.');
+      } else {
+        setOutput(`Mock generated response based on: ${resolved}`);
+      }
       setLoading(false);
     }, 1200);
   }
@@ -83,24 +116,22 @@ function LLMPreview({ widget }: { widget: Widget }) {
         <p className={CARD_TITLE}>{widget.title}</p>
       </div>
       <div className="flex-1 px-4 py-3 flex flex-col gap-3 overflow-y-auto">
-        <textarea
-          className={`${INPUT_STYLE} resize-none`}
-          placeholder="Enter your prompt here…"
-          rows={3}
-          value={userInput}
-          onChange={e => setUserInput(e.target.value)}
-        />
+        <WarningList warnings={warnings} />
+
         <button onClick={handleGenerate} disabled={loading} className={BTN_PRIMARY}>
           {loading ? 'Generating…' : 'Generate'}
         </button>
+
         {loading && (
           <p className="text-xs text-[#6b7280] text-center animate-pulse">Working on it…</p>
         )}
+
         {output && (
           <div className="rounded-lg bg-[#0d0d0d] border border-[#2a2a2a] px-3 py-2.5 text-sm text-[#d1d5db] leading-relaxed">
             {output}
           </div>
         )}
+
         {!output && !loading && (
           <p className="text-xs text-[#4b5563] text-center">{widget.placeholder}</p>
         )}
@@ -111,12 +142,18 @@ function LLMPreview({ widget }: { widget: Widget }) {
 
 // ─── Image Generator ──────────────────────────────────────────────────────────
 
-function ImagePreview({ widget }: { widget: Widget }) {
+function ImagePreview({ widget, runtimeValues }: SharedProps) {
   const [generated, setGenerated] = useState(false);
   const [loading, setLoading]     = useState(false);
+  const [warnings, setWarnings]   = useState<string[]>([]);
+  const [resolvedPrompt, setResolvedPrompt] = useState('');
 
   function handleGenerate() {
     if (loading) return;
+    const template = widget.imagePrompt ?? '';
+    const { resolved, warnings: w } = resolvePrompt(template, runtimeValues);
+    setWarnings(w);
+    setResolvedPrompt(resolved);
     setLoading(true);
     setTimeout(() => {
       setGenerated(true);
@@ -124,15 +161,24 @@ function ImagePreview({ widget }: { widget: Widget }) {
     }, 1500);
   }
 
+  const displayPrompt = resolvedPrompt || widget.imagePrompt || '';
+
   return (
     <div className={CARD}>
       <div className={CARD_HEADER}>
         <p className={CARD_TITLE}>{widget.title}</p>
       </div>
       <div className="flex-1 px-4 py-3 flex flex-col gap-3">
+        <WarningList warnings={warnings} />
+
         <div
           className="flex-1 rounded-lg border border-[#2a2a2a] flex flex-col items-center justify-center gap-2 p-4"
-          style={{ minHeight: 80, background: generated ? 'linear-gradient(135deg, #1a1a2e 0%, #16213e 55%, #0f3460 100%)' : '#0d0d0d' }}
+          style={{
+            minHeight: 80,
+            background: generated
+              ? 'linear-gradient(135deg, #1a1a2e 0%, #16213e 55%, #0f3460 100%)'
+              : '#0d0d0d',
+          }}
         >
           {loading ? (
             <p className="text-xs text-[#6b7280] animate-pulse">Generating image…</p>
@@ -144,9 +190,11 @@ function ImagePreview({ widget }: { widget: Widget }) {
                 <path d="M21 15l-5-5L5 21" />
               </svg>
               <p className="text-xs text-[#6b7280]">Mock generated image</p>
-              <p className="text-[10px] text-[#4b5563] text-center max-w-[160px] leading-relaxed">
-                {widget.imagePrompt}
-              </p>
+              {displayPrompt && (
+                <p className="text-[10px] text-[#4b5563] text-center max-w-[160px] leading-relaxed italic">
+                  {displayPrompt}
+                </p>
+              )}
             </>
           ) : (
             <>
@@ -155,10 +203,13 @@ function ImagePreview({ widget }: { widget: Widget }) {
                 <circle cx="8.5" cy="8.5" r="1.5" />
                 <path d="M21 15l-5-5L5 21" />
               </svg>
-              <p className="text-xs text-[#4b5563] text-center leading-relaxed">{widget.imagePrompt}</p>
+              {displayPrompt && (
+                <p className="text-xs text-[#4b5563] text-center leading-relaxed">{displayPrompt}</p>
+              )}
             </>
           )}
         </div>
+
         <button onClick={handleGenerate} disabled={loading} className={BTN_PRIMARY}>
           {loading ? 'Generating…' : generated ? 'Regenerate' : 'Generate Image'}
         </button>
@@ -174,7 +225,7 @@ interface Message {
   text: string;
 }
 
-function ChatPreview({ widget }: { widget: Widget }) {
+function ChatPreview({ widget }: SharedProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput]       = useState('');
   const [thinking, setThinking] = useState(false);
@@ -205,7 +256,6 @@ function ChatPreview({ widget }: { widget: Widget }) {
         <p className={CARD_TITLE}>{widget.title}</p>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2 min-h-0">
         {messages.length === 0 && (
           <p className="text-xs text-[#4b5563] text-center mt-3">
@@ -243,7 +293,6 @@ function ChatPreview({ widget }: { widget: Widget }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input bar */}
       <div className="shrink-0 px-4 py-3 border-t border-[#242424] flex gap-2">
         <input
           type="text"
@@ -252,10 +301,7 @@ function ChatPreview({ widget }: { widget: Widget }) {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
           }}
         />
         <button
@@ -276,12 +322,12 @@ function ChatPreview({ widget }: { widget: Widget }) {
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export default function PreviewWidget({ widget }: { widget: Widget }) {
-  switch (widget.type) {
-    case 'static_text': return <StaticTextPreview widget={widget} />;
-    case 'input':       return <InputPreview widget={widget} />;
-    case 'llm':         return <LLMPreview widget={widget} />;
-    case 'image':       return <ImagePreview widget={widget} />;
-    case 'chat':        return <ChatPreview widget={widget} />;
+export default function PreviewWidget(props: SharedProps) {
+  switch (props.widget.type) {
+    case 'static_text': return <StaticTextPreview {...props} />;
+    case 'input':       return <InputPreview {...props} />;
+    case 'llm':         return <LLMPreview {...props} />;
+    case 'image':       return <ImagePreview {...props} />;
+    case 'chat':        return <ChatPreview {...props} />;
   }
 }
