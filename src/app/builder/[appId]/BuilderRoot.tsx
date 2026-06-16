@@ -249,6 +249,10 @@ export default function BuilderRoot() {
 
   const selectedWidget = widgets.find(w => w.id === selectedId) ?? null;
 
+  // Derive a widgetId → title map so the resolver can use human names in warnings
+  const widgetTitles: Record<string, string> = {};
+  for (const w of widgets) widgetTitles[w.id] = w.title;
+
   // ── Preview mode ─────────────────────────────────────────────────────────
 
   if (isPreview) {
@@ -288,6 +292,7 @@ export default function BuilderRoot() {
                   <PreviewWidget
                     widget={w}
                     runtimeValues={runtimeValues}
+                    widgetTitles={widgetTitles}
                     onValueChange={(id, value) =>
                       setRuntimeValues(prev => ({ ...prev, [id]: value }))
                     }

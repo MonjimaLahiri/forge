@@ -10,11 +10,13 @@ export interface ResolveResult {
  * - Known but empty IDs → replaced with "" and a warning
  * - Matched and non-empty → replaced with the value
  *
+ * Pass `titles` to get human-readable widget names in warnings instead of raw IDs.
  * The regex covers both short IDs and UUIDs (which contain hyphens).
  */
 export function resolvePrompt(
   template: string,
-  values: Record<string, string>
+  values: Record<string, string>,
+  titles?: Record<string, string>
 ): ResolveResult {
   const warnings: string[] = [];
 
@@ -24,7 +26,8 @@ export function resolvePrompt(
       return `[missing: ${id}]`;
     }
     if (!values[id].trim()) {
-      warnings.push(`Input widget "${id}" is empty — fill it in before generating.`);
+      const name = titles?.[id] ?? id;
+      warnings.push(`Enter a value in "${name}" before generating.`);
       return '';
     }
     return values[id];
