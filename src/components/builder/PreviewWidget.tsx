@@ -15,28 +15,6 @@ interface SharedProps {
 
 // ─── Mock content generators ──────────────────────────────────────────────────
 
-function generateMockText(resolvedPrompt: string): string {
-  if (!resolvedPrompt.trim()) return 'Add a prompt in the editor before generating.';
-
-  // Extract the subject from common prompt patterns
-  const match =
-    resolvedPrompt.match(/(?:description|copy|content|text|post|summary|email)\s+for\s+(.{3,}?)(?:\.|$)/i) ??
-    resolvedPrompt.match(/(?:about|for|of|on)\s+(.{3,}?)(?:\.|$)/i);
-
-  const raw = match?.[1]?.trim() ?? resolvedPrompt.trim();
-  const subject = raw.length > 80 ? raw.slice(0, 80) + '…' : raw;
-  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-  const outputs = [
-    `Meet the ${subject}. Designed with modern spaces in mind, it combines clean aesthetics with reliable performance. Its thoughtful details and lasting quality make it a natural choice for anyone who values both form and function.`,
-    `${cap(subject)} delivers exactly what it promises: a refined experience built around simplicity and purpose. Lightweight, intuitive, and crafted to last — it fits seamlessly into everyday life without missing a beat.`,
-    `Introducing ${subject} — crafted for those who value substance and style in equal measure. From first use, it feels considered and complete, with every detail earning its place.`,
-    `${cap(subject)} stands out for all the right reasons. Precision-crafted and thoughtfully designed, it performs beautifully whether at home, in the office, or anywhere in between.`,
-  ];
-
-  return outputs[resolvedPrompt.length % outputs.length];
-}
-
 function generateChatReply(userMsg: string, systemPrompt: string): string {
   const lower = userMsg.toLowerCase();
 
@@ -153,24 +131,53 @@ function InputPreview({ widget, onValueChange }: SharedProps) {
 
 // ─── Text Generator (LLM) ─────────────────────────────────────────────────────
 
+type GenerateSource = 'ai' | 'mock' | null;
+type GenerateReason = 'no-key' | 'fallback' | null;
+
 function LLMPreview({ widget, runtimeValues, widgetTitles }: SharedProps) {
   const [output, setOutput]     = useState('');
   const [warnings, setWarnings] = useState<string[]>([]);
   const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+  const [source, setSource]     = useState<GenerateSource>(null);
+  const [reason, setReason]     = useState<GenerateReason>(null);
 
-  function handleGenerate() {
+  async function handleGenerate() {
     if (loading) return;
     const template = widget.prompt ?? '';
     const { resolved, warnings: w } = resolvePrompt(template, runtimeValues, widgetTitles);
     setWarnings(w);
     setLoading(true);
     setOutput('');
-    // 500–800 ms mock delay
-    const delay = 500 + Math.floor(Math.random() * 300);
-    setTimeout(() => {
-      setOutput(generateMockText(resolved));
+    setError('');
+    setSource(null);
+    setReason(null);
+
+    try {
+      const res = await fetch('/api/generate-text', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          prompt: resolved,
+          model: widget.model,
+          temperature: widget.temperature,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(typeof data?.error === 'string' ? data.error : 'Something went wrong. Please try again.');
+        return;
+      }
+
+      setOutput(data.text);
+      setSource(data.source === 'ai' ? 'ai' : 'mock');
+      setReason(data.reason === 'no-key' || data.reason === 'fallback' ? data.reason : null);
+    } catch {
+      setError('Could not reach the server. Check your connection and try again.');
+    } finally {
       setLoading(false);
-    }, delay);
+    }
   }
 
   return (
@@ -186,16 +193,42 @@ function LLMPreview({ widget, runtimeValues, widgetTitles }: SharedProps) {
         </button>
 
         {loading && (
-          <p className="text-xs text-[#6b7280] text-center animate-pulse">Working on it…</p>
+          <p className="text-xs text-[#6b7280] text-center animate-pulse">Generating with Gemini…</p>
         )}
 
-        {output && (
+        {error && !loading && (
+          <div className="rounded-lg bg-[#7f1d1d]/20 border border-[#7f1d1d]/40 px-3 py-2 flex items-start justify-between gap-2">
+            <p className="text-xs text-[#fca5a5] leading-snug">{error}</p>
+            <button
+              onClick={handleGenerate}
+              className="shrink-0 text-xs font-semibold text-[#fca5a5] hover:text-[#fecaca] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#ef4444] rounded px-1"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {output && !error && reason === 'fallback' && (
+          <div className="rounded-lg bg-[#854d0e]/20 border border-[#854d0e]/40 px-3 py-2">
+            <p className="text-xs text-[#fbbf24] leading-snug">
+              Gemini is temporarily unavailable — showing mock output instead.
+            </p>
+          </div>
+        )}
+
+        {output && !error && (
           <div className="rounded-lg bg-[#0d0d0d] border border-[#2a2a2a] px-3 py-2.5 text-sm text-[#d1d5db] leading-relaxed">
             {output}
           </div>
         )}
 
-        {!output && !loading && (
+        {output && !error && (
+          <p className="text-[10px] text-[#4b5563] text-center">
+            {source === 'ai' ? 'Generated with Gemini' : 'Mock output'}
+          </p>
+        )}
+
+        {!output && !loading && !error && (
           <p className="text-xs text-[#4b5563] text-center">{widget.placeholder}</p>
         )}
       </div>
@@ -236,6 +269,7 @@ function ImagePreview({ widget, runtimeValues, widgetTitles }: SharedProps) {
     <div className={CARD}>
       <div className={CARD_HEADER}>
         <p className={CARD_TITLE}>{widget.title}</p>
+        <p className="text-[10px] text-[#4b5563] mt-0.5">Image generation mock — no real images are created yet.</p>
       </div>
       <div className="flex-1 px-4 py-3 flex flex-col gap-3">
         <WarningList warnings={warnings} />
@@ -245,7 +279,7 @@ function ImagePreview({ widget, runtimeValues, widgetTitles }: SharedProps) {
           style={{ minHeight: 80, background: bgStyle, transition: 'background 0.4s ease' }}
         >
           {loading ? (
-            <p className="text-xs text-[#6b7280] animate-pulse">Generating image…</p>
+            <p className="text-xs text-[#6b7280] animate-pulse">Generating mock image…</p>
           ) : generated ? (
             <>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#6a8fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -253,7 +287,7 @@ function ImagePreview({ widget, runtimeValues, widgetTitles }: SharedProps) {
                 <circle cx="8.5" cy="8.5" r="1.5" />
                 <path d="M21 15l-5-5L5 21" />
               </svg>
-              <p className="text-[10px] font-semibold text-[#6b7280] uppercase tracking-wider">Mock image</p>
+              <p className="text-[10px] font-semibold text-[#6b7280] uppercase tracking-wider">Mock image preview</p>
               {displayPrompt && (
                 <p className="text-[10px] text-[#9ca3af] text-center max-w-[180px] leading-relaxed italic">
                   {displayPrompt}
@@ -275,7 +309,7 @@ function ImagePreview({ widget, runtimeValues, widgetTitles }: SharedProps) {
         </div>
 
         <button onClick={handleGenerate} disabled={loading} className={BTN_PRIMARY}>
-          {loading ? 'Generating…' : generated ? 'Regenerate' : 'Generate Image'}
+          {loading ? 'Generating…' : generated ? 'Regenerate Mock Image' : 'Generate Mock Image'}
         </button>
       </div>
     </div>
