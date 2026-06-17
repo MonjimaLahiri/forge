@@ -1,14 +1,17 @@
 'use client';
 
-import { useState, useRef, useEffect, startTransition } from 'react';
+import { useState, useRef, useEffect, startTransition, useMemo } from 'react';
 import Link from 'next/link';
 import type { Widget, WidgetType } from '@/lib/types';
 import { saveDraft, loadDraft, clearDraft } from '@/lib/storage';
+import { validateApp } from '@/lib/validateApp';
+import type { ValidationIssue } from '@/lib/validateApp';
 import Button from '@/components/ui/Button';
 import WidgetPalette from '@/components/builder/WidgetPalette';
 import WidgetCard from '@/components/builder/WidgetCard';
 import PropertiesPanel from '@/components/builder/PropertiesPanel';
 import PreviewWidget from '@/components/builder/PreviewWidget';
+import ChecklistModal from '@/components/builder/ChecklistModal';
 
 // ─── Widget defaults ──────────────────────────────────────────────────────────
 
@@ -83,6 +86,51 @@ function EmptyCanvas() {
   );
 }
 
+// ─── Readiness indicator ──────────────────────────────────────────────────────
+
+function ReadinessIndicator({ issues, onClick }: { issues: ValidationIssue[]; onClick: () => void }) {
+  const errors   = issues.filter(i => i.severity === 'error').length;
+  const warnings = issues.filter(i => i.severity === 'warning').length;
+
+  if (errors === 0 && warnings === 0) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex items-center gap-1.5 text-xs text-[#4b5563] hover:text-[#f0f0f0] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#1a73e8] rounded px-1"
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e] shrink-0" />
+        Ready
+      </button>
+    );
+  }
+
+  if (errors > 0) {
+    const total = errors + warnings;
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex items-center gap-1.5 text-xs text-[#ef4444] hover:text-[#f87171] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#ef4444] rounded px-1"
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-[#ef4444] shrink-0" />
+        {total} issue{total !== 1 ? 's' : ''}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-1.5 text-xs text-[#f59e0b] hover:text-[#fbbf24] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#f59e0b] rounded px-1"
+    >
+      <span className="w-1.5 h-1.5 rounded-full bg-[#f59e0b] shrink-0" />
+      {warnings} warning{warnings !== 1 ? 's' : ''}
+    </button>
+  );
+}
+
 // ─── Save status indicator ────────────────────────────────────────────────────
 
 function SaveIndicator({ status }: { status: 'saved' | 'saving' }) {
@@ -113,6 +161,11 @@ export default function BuilderRoot() {
   const [saveStatus, setSaveStatus]     = useState<'saved' | 'saving'>('saved');
   const [isPreview, setIsPreview]       = useState(false);
   const [runtimeValues, setRuntimeValues] = useState<Record<string, string>>({});
+  const [showChecklist, setShowChecklist]             = useState(false);
+  const [showPublish, setShowPublish]                 = useState(false);
+  const [previewBannerDismissed, setPreviewBannerDismissed] = useState(false);
+
+  const issues = useMemo(() => validateApp(widgets), [widgets]);
 
   const dragging      = useRef<DragState | null>(null);
   const saveTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -276,6 +329,33 @@ export default function BuilderRoot() {
           </button>
         </header>
 
+        {/* Warning banner: shown in preview when blocking errors exist */}
+        {issues.some(i => i.severity === 'error') && !previewBannerDismissed && (
+          <div className="shrink-0 flex items-center gap-3 px-5 py-3 bg-[#ef4444]/10 border-b border-[#ef4444]/30">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <p className="flex-1 text-xs text-[#fca5a5]">
+              This app has{' '}
+              <span className="font-semibold">{issues.filter(i => i.severity === 'error').length} error{issues.filter(i => i.severity === 'error').length !== 1 ? 's' : ''}</span>
+              {' '}— some widgets may not work correctly.
+            </p>
+            <button
+              type="button"
+              onClick={() => setPreviewBannerDismissed(true)}
+              aria-label="Dismiss warning"
+              className="text-[#fca5a5]/60 hover:text-[#fca5a5] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ef4444] rounded"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        )}
+
         <div className="flex-1 overflow-auto">
           {widgets.length === 0 ? (
             <div className="flex items-center justify-center h-full min-h-[400px]">
@@ -390,9 +470,11 @@ export default function BuilderRoot() {
             </button>
           </div>
 
-          {/* Right: save status + reset + publish */}
+          {/* Right: save status + readiness + reset + preview + publish */}
           <div className="flex items-center gap-4 shrink-0">
             <SaveIndicator status={saveStatus} />
+
+            <ReadinessIndicator issues={issues} onClick={() => setShowChecklist(true)} />
 
             <button
               type="button"
@@ -402,14 +484,14 @@ export default function BuilderRoot() {
               Reset
             </button>
 
-            <Button variant="outline" size="sm" onClick={() => setIsPreview(true)}>
+            <Button variant="outline" size="sm" onClick={() => { setPreviewBannerDismissed(false); setIsPreview(true); }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <polygon points="5 3 19 12 5 21 5 3" />
               </svg>
               Preview
             </Button>
 
-            <Button size="sm">
+            <Button size="sm" onClick={() => setShowPublish(true)}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
                 <polyline points="16 6 12 2 8 6" />
@@ -465,6 +547,26 @@ export default function BuilderRoot() {
 
         </div>
       </div>
+
+      {/* Modals */}
+      {showChecklist && (
+        <ChecklistModal
+          mode="checklist"
+          appName={appName}
+          widgetCount={widgets.length}
+          issues={issues}
+          onClose={() => setShowChecklist(false)}
+        />
+      )}
+      {showPublish && (
+        <ChecklistModal
+          mode="publish"
+          appName={appName}
+          widgetCount={widgets.length}
+          issues={issues}
+          onClose={() => setShowPublish(false)}
+        />
+      )}
     </div>
   );
 }
