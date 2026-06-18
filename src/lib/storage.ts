@@ -103,7 +103,15 @@ export function saveApp(id: string, patch: Partial<Pick<App, 'name' | 'widgets'>
   const apps = readApps();
   const idx = apps.findIndex((a) => a.id === id);
   if (idx === -1) return;
-  apps[idx] = { ...apps[idx], ...patch, updatedAt: new Date().toISOString() };
+  const current = apps[idx];
+  const next: App = { ...current, ...patch, updatedAt: new Date().toISOString() };
+  // Editing a published app invalidates the published snapshot — demote it back
+  // to draft so My Apps and the public route reflect that it's no longer live.
+  if (current.status === 'published') {
+    next.status = 'draft';
+    next.publishedAt = undefined;
+  }
+  apps[idx] = next;
   writeApps(apps);
 }
 

@@ -45,6 +45,20 @@ export default function RuntimeRoot({ appId }: { appId: string }) {
     );
   }
 
+  if (app.status !== 'published') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#0d0d0d] gap-4">
+        <p className="text-sm text-[#6b7280]">This app is not currently published.</p>
+        <Link
+          href={`/builder/${app.id}`}
+          className="text-sm font-medium text-[#1a73e8] hover:text-[#4a9ef8] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8] rounded"
+        >
+          Edit app
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col min-h-screen bg-[#0d0d0d]">
       <header className="h-[60px] shrink-0 flex items-center justify-between px-6 border-b border-[#2a2a2a] bg-[#161616]">

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Widget } from '@/lib/types';
 import { resolvePrompt } from '@/lib/resolvePrompt';
+import { promptToGradient } from '@/lib/mockImage';
 
 // ─── Shared props ─────────────────────────────────────────────────────────────
 
@@ -41,18 +42,6 @@ function generateChatReply(userMsg: string, systemPrompt: string): string {
   }
 
   return `Thanks for your message about "${snippet}". I've noted your question and will do my best to help. (Mock response — connect a real AI model for actual conversation.)`;
-}
-
-function promptToGradient(prompt: string): string {
-  const hash = prompt.split('').reduce((a, c) => (a + c.charCodeAt(0)) | 0, 0);
-  const gradients = [
-    'linear-gradient(135deg, #1a1a2e 0%, #16213e 55%, #0f3460 100%)',
-    'linear-gradient(135deg, #0d1b2a 0%, #1b2838 55%, #1a3a5c 100%)',
-    'linear-gradient(135deg, #1a2e1a 0%, #1e3a1e 55%, #0a4a1a 100%)',
-    'linear-gradient(135deg, #2e1a0a 0%, #3d2810 55%, #5c3a1a 100%)',
-    'linear-gradient(135deg, #2a0a2e 0%, #3d1040 55%, #5c0a6a 100%)',
-  ];
-  return gradients[Math.abs(hash) % gradients.length];
 }
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
@@ -239,48 +228,83 @@ function LLMPreview({ widget, runtimeValues, widgetTitles }: SharedProps) {
 // ─── Image Generator ──────────────────────────────────────────────────────────
 
 function ImagePreview({ widget, runtimeValues, widgetTitles }: SharedProps) {
-  const [generated, setGenerated]   = useState(false);
   const [loading, setLoading]       = useState(false);
   const [warnings, setWarnings]     = useState<string[]>([]);
-  const [displayPrompt, setDisplayPrompt] = useState(widget.imagePrompt ?? '');
+  const [error, setError]           = useState('');
+  const [source, setSource]         = useState<GenerateSource>(null);
+  const [reason, setReason]         = useState<GenerateReason>(null);
+  const [imageUrl, setImageUrl]     = useState('');
   const [gradient, setGradient]     = useState('');
+  const [displayPrompt, setDisplayPrompt] = useState(widget.imagePrompt ?? '');
 
-  function handleGenerate() {
+  async function handleGenerate() {
     if (loading) return;
     const template = widget.imagePrompt ?? '';
     const { resolved, warnings: w } = resolvePrompt(template, runtimeValues, widgetTitles);
+    const promptForGeneration = resolved || template;
     setWarnings(w);
-    setDisplayPrompt(resolved || template);
-    setGradient(promptToGradient(resolved || template));
+    setDisplayPrompt(promptForGeneration);
     setLoading(true);
-    // 800–1100 ms mock delay
-    const delay = 800 + Math.floor(Math.random() * 300);
-    setTimeout(() => {
-      setGenerated(true);
+    setError('');
+    setSource(null);
+    setReason(null);
+    setImageUrl('');
+
+    try {
+      const res = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          prompt: promptForGeneration,
+          imageStyle: widget.imageStyle,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(typeof data?.error === 'string' ? data.error : 'Something went wrong. Please try again.');
+        return;
+      }
+
+      if (data.source === 'ai' && typeof data.imageUrl === 'string') {
+        setImageUrl(data.imageUrl);
+        setSource('ai');
+      } else {
+        setGradient(promptToGradient(promptForGeneration));
+        setSource('mock');
+      }
+      setReason(data.reason === 'fallback' ? data.reason : null);
+    } catch {
+      setError('Could not reach the server. Check your connection and try again.');
+    } finally {
       setLoading(false);
-    }, delay);
+    }
   }
 
-  const bgStyle = generated
-    ? gradient || promptToGradient(widget.imagePrompt ?? '')
-    : '#0d0d0d';
+  const bgStyle = source === 'mock' ? gradient : '#0d0d0d';
 
   return (
     <div className={CARD}>
       <div className={CARD_HEADER}>
         <p className={CARD_TITLE}>{widget.title}</p>
-        <p className="text-[10px] text-[#4b5563] mt-0.5">Image generation mock — no real images are created yet.</p>
       </div>
       <div className="flex-1 px-4 py-3 flex flex-col gap-3">
         <WarningList warnings={warnings} />
 
         <div
-          className="flex-1 rounded-lg border border-[#2a2a2a] flex flex-col items-center justify-center gap-2 p-4"
+          className="flex-1 rounded-lg border border-[#2a2a2a] flex flex-col items-center justify-center gap-2 p-4 overflow-hidden"
           style={{ minHeight: 80, background: bgStyle, transition: 'background 0.4s ease' }}
         >
           {loading ? (
-            <p className="text-xs text-[#6b7280] animate-pulse">Generating mock image…</p>
-          ) : generated ? (
+            <p className="text-xs text-[#6b7280] animate-pulse">Generating image…</p>
+          ) : source === 'ai' && imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- ephemeral base64 data URL, not a static/remote asset next/image can optimize or cache
+            <img
+              src={imageUrl}
+              alt={displayPrompt || widget.title}
+              className="max-w-full max-h-full object-contain rounded"
+            />
+          ) : source === 'mock' ? (
             <>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#6a8fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -308,8 +332,34 @@ function ImagePreview({ widget, runtimeValues, widgetTitles }: SharedProps) {
           )}
         </div>
 
+        {error && !loading && (
+          <div className="rounded-lg bg-[#7f1d1d]/20 border border-[#7f1d1d]/40 px-3 py-2 flex items-start justify-between gap-2">
+            <p className="text-xs text-[#fca5a5] leading-snug">{error}</p>
+            <button
+              onClick={handleGenerate}
+              className="shrink-0 text-xs font-semibold text-[#fca5a5] hover:text-[#fecaca] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#ef4444] rounded px-1"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {source && !error && reason === 'fallback' && (
+          <div className="rounded-lg bg-[#854d0e]/20 border border-[#854d0e]/40 px-3 py-2">
+            <p className="text-xs text-[#fbbf24] leading-snug">
+              Image generation is temporarily unavailable — showing mock output instead.
+            </p>
+          </div>
+        )}
+
+        {source && !error && (
+          <p className="text-[10px] text-[#4b5563] text-center">
+            {source === 'ai' ? 'AI generated' : 'Mock output'}
+          </p>
+        )}
+
         <button onClick={handleGenerate} disabled={loading} className={BTN_PRIMARY}>
-          {loading ? 'Generating…' : generated ? 'Regenerate Mock Image' : 'Generate Mock Image'}
+          {loading ? 'Generating…' : source ? 'Regenerate Image' : 'Generate Image'}
         </button>
       </div>
     </div>
