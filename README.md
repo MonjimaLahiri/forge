@@ -2,7 +2,11 @@
 
 **A no-code AI app builder for non-technical teams.** Drag widgets onto a canvas, wire them together with plain-language prompts, preview the result, and publish a standalone app — no engineering ticket required.
 
-> Status: active build. Phases 1–4 (shell, builder canvas, properties/validation, real AI) plus Phase 5 productization (multi-app storage, app management, public app route, mock publishing) are complete. See [`docs/project-status.md`](docs/project-status.md) for the detailed feature matrix and [`docs/case-study-notes.md`](docs/case-study-notes.md) for the design narrative.
+> Status: active build. Phases 1–4 (shell, builder canvas, properties/validation, real AI) plus Phase 5 productization (multi-app storage, app management, public app route, mock publishing, real image generation, publish/draft correctness) are complete. See [`docs/project-status.md`](docs/project-status.md) for the detailed feature matrix and [`docs/case-study-notes.md`](docs/case-study-notes.md) for the design narrative.
+
+## Live Demo
+
+> _Placeholder — add a deployed URL here once real hosting (backend phase) lands. Until then, run it locally via Setup Instructions below._
 
 ---
 
@@ -54,8 +58,10 @@ Non-technical teammates in marketing, support, operations, and product roles who
 | **Multi-app local storage** | Built — every app is a separate, independently-saved entry |
 | **Rename / duplicate / delete apps** | Built — from the My Apps card menu |
 | **Mock publishing** | Built — flips an app's status and makes it viewable at a public-style runtime URL |
-| **Public runtime route** (`/app/[appId]`) | Built — no builder chrome, just the live app |
-| Image Generator, Chat Box widgets | Polished mock only (no real API calls yet) |
+| **Public runtime route** (`/app/[appId]`) | Built — no builder chrome, just the live app; shows a clear message if the app is no longer published |
+| **Publish/draft correctness** | Built — editing a published app automatically reverts it to draft until republished |
+| **Image Generator widget → real Pollinations.ai image API** | Built — server-side route, no API key needed, mock fallback |
+| Chat Box widget | Polished mock only (no real API calls yet) |
 | Auth, onboarding, database, real hosting | Not yet built |
 
 Full detail in [`docs/project-status.md`](docs/project-status.md).
@@ -67,13 +73,24 @@ Full detail in [`docs/project-status.md`](docs/project-status.md).
 - **TypeScript** throughout
 - **Tailwind CSS v4** (CSS-first `@theme` config, no `tailwind.config.js`)
 - **Google Gemini API** (`gemini-2.5-flash-lite` → `gemini-2.5-flash` → `gemini-2.0-flash` fallback chain) for real text generation, called server-side only
+- **Pollinations.ai** (free, keyless public image API) for real image generation, called server-side only
 - **localStorage** for all persistence (no database yet)
 
 Planned but not yet introduced: React Flow (canvas), Zustand (global state), Radix UI, Zod, Supabase/PostgreSQL — see [`docs/architecture.md`](docs/architecture.md) for why the current canvas is hand-built instead.
 
-## AI Integration Flow
+## AI Providers Used
 
-The Text Generator widget is the one widget connected to a real model:
+| Widget | Provider | Why this one | Needs a key? |
+|---|---|---|---|
+| Text Generator | Google Gemini (`gemini-2.5-flash-lite` → `gemini-2.5-flash` → `gemini-2.0-flash`) | Free tier, no SDK needed, called via raw `fetch` | Yes — `GEMINI_API_KEY` |
+| Image Generator | Pollinations.ai | Genuinely free and keyless — chosen after Google made every Gemini image model ("Nano Banana") and the standalone Imagen models paid-only in mid-2026, confirmed by testing all of them directly against the live API | No |
+| Chat Box | None (mocked) | Explicitly out of scope so far — keyword-matched canned replies | — |
+
+Both real-provider widgets follow the same shape: one server-only route, the API key (if any) never reaches the browser, and any provider failure (quota, network, safety block) falls back to a polished mock rather than a broken UI — see the AI flow sections in [`docs/architecture.md`](docs/architecture.md) for the full request/fallback sequence.
+
+## Text Generation Flow (Gemini)
+
+The Text Generator widget is connected to a real model:
 
 1. In Preview mode (or on the published runtime page), the user clicks **Generate**.
 2. The client resolves `{{widgetId.value}}` tokens in the prompt against live widget values (see Prompt Reference System below).
@@ -82,6 +99,17 @@ The Text Generator widget is the one widget connected to a real model:
 5. It tries three models in order (cheapest/most available first); if one returns a quota error, blocked content, or an empty response, it tries the next.
 6. If no key is configured, or all three models fail, the route returns the same polished mock copy the UI always had — so the app works identically with or without a live key.
 7. The UI shows a small label ("Generated with Gemini" / "Mock output") and a friendly notice if Gemini failed and the mock kicked in, so the degradation is never silent or confusing.
+
+## Image Generation Flow (Pollinations)
+
+The Image Generator widget is connected to a real provider too, with no API key required:
+
+1. In Preview mode (or on the published runtime page), the user clicks **Generate**.
+2. The client resolves the image prompt template the same way text prompts are resolved, and appends the widget's image style if set.
+3. The resolved prompt is POSTed to `/api/generate-image` — a server-only route handler.
+4. The route requests `image.pollinations.ai/prompt/<encoded prompt>` with a random `seed` (so "Regenerate" produces a fresh image instead of a cached one), then base64-encodes the response body into a `data:` URL.
+5. Any non-2xx response, non-image content type, or network error falls back to the original gradient-card mock — never a broken widget.
+6. The UI shows the same "AI generated" / "Mock output" label and fallback notice pattern the Text Generator uses.
 
 ## Prompt Reference System
 
@@ -97,9 +125,13 @@ A separate validator (`lib/validateApp.ts`) catches dangling references and miss
 
 Every app — draft or published — is one entry in a single JSON array under `localStorage['forge_apps']`. Each entry carries its own `id`, `name`, `status` (`draft`/`published`), `widgets[]`, and timestamps. `lib/storage.ts` exposes the only way to touch that array: `listApps`, `getApp`, `createApp`, `saveApp` (name/widgets, debounced autosave), `duplicateApp` (deep-cloned widgets, forced back to draft), `deleteApp`, and `publishApp` (flips status). Every operation reads the whole array, mutates one entry, and writes the whole array back in a single synchronous call — there's no partial-write state. An older single-draft format (`forge_builder_draft`) is auto-migrated into this array the first time it's read, so upgrading doesn't lose in-progress work.
 
+## Publish & Draft Behavior
+
+A published app is a snapshot, not a permanent flag: editing a published app's name or widgets (in the builder, via Reset, or by renaming it from My Apps) automatically reverts its `status` back to `draft` and clears `publishedAt`, since the live published version no longer matches what's been published. This is handled centrally in `saveApp`, the one function every edit path already calls, so there's no separate "dirty" tracking to keep in sync. The user has to explicitly publish again to make the new version live.
+
 ## Public App Route
 
-Publishing an app (via the builder's Publish button → confirm) sets its status to `published` and makes it viewable at `/app/[appId]` — a clean runtime page with no sidebar, no widget palette, no properties panel. It reads the app straight out of `localStorage` and renders its widgets live: the Text Generator still calls real Gemini, Image Generator and Chat Box stay mocked. It's "public" in the sense of having its own clean URL and no editing UI — it isn't yet hosted anywhere real, since there's no backend (see Known Limitations).
+Publishing an app (via the builder's Publish button → confirm) sets its status to `published` and makes it viewable at `/app/[appId]` — a clean runtime page with no sidebar, no widget palette, no properties panel. It reads the app straight out of `localStorage` and renders its widgets live: Text Generator calls real Gemini, Image Generator calls real Pollinations, Chat Box stays mocked. If the app has since been edited back to draft, the page shows "This app is not currently published." with a link back to the builder instead of serving stale content. It's "public" in the sense of having its own clean URL and no editing UI — it isn't yet hosted anywhere real, since there's no backend (see Known Limitations).
 
 ## Screenshots
 
@@ -110,7 +142,8 @@ Publishing an app (via the builder's Publish button → confirm) sets its status
 - [ ] Discover / template gallery
 - [ ] Builder canvas (widget palette open)
 - [ ] Properties panel (Text Generator widget selected)
-- [ ] Preview mode — real Gemini output
+- [ ] Preview mode — real Gemini text output
+- [ ] Preview mode — real Pollinations image output
 - [ ] Publish flow — confirmation + "Open published app"
 - [ ] Public runtime view (`/app/[appId]`)
 
@@ -122,7 +155,8 @@ Early design references (not final screenshots) live in `docs/reference wirefram
 # Install dependencies
 npm install
 
-# (Optional) enable real AI generation — without this, the app uses mock output
+# (Optional) enable real Text Generator output — without this, it uses mock output.
+# The Image Generator needs no setup at all; it works out of the box.
 cp .env.local.example .env.local
 # then add your Gemini API key (see Environment Variables below)
 
@@ -143,14 +177,15 @@ npx tsc --noEmit     # Type-check
 |---|---|---|
 | `GEMINI_API_KEY` | Optional | Enables real Text Generator output via Google's Gemini API. Get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Without it, the app uses a polished mock generator — every other feature works identically either way. |
 
-Set it in `.env.local` (gitignored; never commit it). `.env.local.example` documents the variable with no real value and is the only env file tracked in git.
+That's the only environment variable in the project. The Image Generator widget needs no key — it calls Pollinations.ai's free, keyless public image API directly. Set `GEMINI_API_KEY` in `.env.local` (gitignored; never commit it). `.env.local.example` documents it with no real value and is the only env file tracked in git.
 
 ## Known Limitations
 
 - No auth or onboarding flow — a single mock user is hardcoded.
 - "Published" apps are viewable at a clean local URL, but there's no real hosting/CDN — the URL only works in the same browser that has the app in its `localStorage`.
 - Discover's template gallery is still static seeded data — "Use template" doesn't yet clone a template into a real app.
-- Image Generator and Chat Box are fully mocked — no real API calls.
+- Image Generator depends on Pollinations.ai, a free third-party service with no uptime SLA or privacy guarantees — fine for a demo, not something to send sensitive prompts through.
+- Chat Box is fully mocked — no real conversational API.
 - No undo/redo, no responsive/mobile builder layout, no multi-page apps.
 
 Full list with context in [`docs/project-status.md`](docs/project-status.md).
@@ -159,8 +194,8 @@ Full list with context in [`docs/project-status.md`](docs/project-status.md).
 
 - **Supabase/PostgreSQL backend** — replace `localStorage` with real persistence
 - **Real authentication** — replace the hardcoded mock user with Supabase Auth
-- **Real image generation** — connect the Image Generator widget to an actual image API
 - **Real publishing/hosting** — a published app reachable outside the creator's own browser
+- A more durable image provider — Pollinations.ai works well for a demo but isn't an enterprise-grade dependency
 - Login/onboarding pages
 - Wire Discover's "Use template" into real app creation
 - Connect Chat Box to a real conversational flow

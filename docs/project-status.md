@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: Phase 5 (Productization) Step 3 complete.
+Last updated: Phase 5 (Productization) Step 5 complete — real image generation and publish/draft correctness.
 
 ## Build Philosophy
 
@@ -10,7 +10,7 @@ Forge is built in phases, each one shippable and demoable on its own, rather tha
 2. **Phase 2** — builder canvas with mock data
 3. **Phase 3** — widget properties and connections (prompt references)
 4. **Phase 4** — real AI integration
-5. **Phase 5 (Productization)** — turn the single-draft builder into a real multi-app product, still on `localStorage` only (this phase)
+5. **Phase 5 (Productization)** — turn the single-draft builder into a real multi-app product, still on `localStorage` only (complete: storage, app management, publishing, real image generation, publish/draft correctness)
 6. **Backend phase (not started)** — Supabase/PostgreSQL, real auth, real hosting
 
 Note on naming: the original build plan called the backend/auth/database work "Phase 5." That work hasn't started yet — what's labeled "Phase 5" below is a productization arc inserted before it, intentionally still local-only, to prove out multi-app management and a publish flow before taking on a real backend.
@@ -59,6 +59,19 @@ A working canvas where widgets can be added from a palette, dragged, selected, a
 - Extracted the widget-rendering logic shared by builder Preview mode and the new public route into `components/builder/AppCanvas.tsx`, so there's one implementation of "run this app's widgets," not two
 - My Apps: published apps now open `/app/[id]` (view) by default, with an "Edit" item added to the card menu so publishing doesn't lock the app out of further edits
 
+### Phase 5 Step 4 — Real image generation
+- New server-only route `src/app/api/generate-image/route.ts`
+- First implementation called Google's Gemini image models ("Nano Banana" family) directly, mirroring the Text Generator's pattern exactly — but direct API testing revealed every Gemini image model, and the standalone Imagen models, require a paid plan as of mid-2026 (zero free-tier quota across the board, confirmed against six different model names)
+- Pivoted to **Pollinations.ai**, a free, keyless public image API — chosen specifically because it needed no new package, no new secret, and no billing setup, consistent with the project's local-only, no-installs-without-asking constraints
+- A random `seed` query parameter on each request ensures "Regenerate" returns a fresh image rather than a cached one for an identical prompt
+- Falls back to the existing mock gradient (`lib/mockImage.ts`, extracted unchanged from the prior inline implementation) on any non-2xx response, non-image content type, or network error — same graceful-degradation philosophy as text
+- UI: "Generating image…" loading state, "AI generated" / "Mock output" label, amber fallback notice — mirrors the Text Generator's established pattern exactly
+
+### Phase 5 Step 5 — Publish/draft correctness
+- Previously, editing a published app left it marked `published` even though the live version no longer matched what was published — a real bug, not a cosmetic one
+- `lib/storage.ts`'s `saveApp` (the single function behind the builder's autosave, the Reset button, and My Apps' rename) now demotes `status: 'published'` back to `'draft'` and clears `publishedAt` whenever it's called against a published app — no separate dirty-tracking needed, since every call site already only invokes `saveApp` on a real change
+- `/app/[appId]` (`RuntimeRoot.tsx`) now checks `app.status === 'published'` before rendering; if an app has been edited back to draft, it shows "This app is not currently published." with a link back to the builder, instead of serving stale/inconsistent content
+
 ## Feature Matrix
 
 | Feature | Status | Notes |
@@ -71,12 +84,13 @@ A working canvas where widgets can be added from a palette, dragged, selected, a
 | Validation / readiness checklist | ✅ Built | Errors + warnings, blocks nothing — advisory only |
 | Preview mode | ✅ Built | Toggled in-component, not a route |
 | Text Generator → real AI | ✅ Built | Gemini, server-side, 3-model fallback chain |
-| Image Generator | 🟡 Mocked | CSS/SVG gradient placeholder, explicitly not connected to any API |
+| Image Generator → real AI | ✅ Built | Pollinations.ai, server-side, no API key needed |
 | Chat Box | 🟡 Mocked | Keyword-based canned replies |
 | **Multi-app persistence** | ✅ Built | One `localStorage` array, each app independent |
 | **Rename / Duplicate / Delete** | ✅ Built | From My Apps card menu and builder header (rename) |
 | **Mock publish flow** | ✅ Built | Real local status change, not real hosting |
-| **Public runtime route** (`/app/[appId]`) | ✅ Built | No builder chrome, reads from `localStorage` |
+| **Public runtime route** (`/app/[appId]`) | ✅ Built | No builder chrome, reads from `localStorage`, shows a clear message if unpublished |
+| **Publish/draft correctness** | ✅ Built | Editing a published app reverts it to draft until republished |
 | Login / onboarding | ❌ Not built | Hardcoded mock user |
 | Database / Supabase | ❌ Not built | Backend phase |
 | Real auth | ❌ Not built | Backend phase |
@@ -89,21 +103,23 @@ A working canvas where widgets can be added from a palette, dragged, selected, a
 - **"Published" isn't really public.** `/app/[appId]` reads from the current browser's `localStorage`, so the URL only resolves for whoever has that app saved locally. There's no server-side copy, no real shareable link yet.
 - **Discover is still static.** Templates are seeded mock data; "Use template" links to `/builder/new` but doesn't actually clone the template's content into the new app.
 - **Widget connections are textual, not visual.** There are no graph edges between widgets — references live inside prompt strings as `{{id.value}}` tokens, validated but not drawn.
-- **Image Generator and Chat Box are fully mocked.** No real image generation API and no real conversational AI are wired up yet, by design.
+- **Chat Box is fully mocked.** No real conversational AI wired up yet, by design.
+- **Image Generator depends on a free, unaffiliated third-party service (Pollinations.ai)** with no uptime SLA and no privacy guarantees — fine for a demo, but a real product would need a more durable, billable provider.
 - **No undo/redo, no responsive/mobile builder layout, no multi-page apps** — all explicitly out of scope per the build plan.
 - **localStorage has practical size limits** (~5MB) that haven't been addressed; not a problem yet at this scale, but will be the forcing function for the backend phase.
+- **"Published" is a local snapshot, not a real deploy.** Editing a published app correctly reverts it to draft, but there's still no server-side copy — the published URL only resolves in the browser that has the app saved locally.
 
 ## Future Roadmap
 
 Near-term (still local-only, extends current architecture):
 - Wire Discover's "Use template" into real app creation (clone seeded widgets into a new app)
 - Per-app thumbnails reflecting actual widget content instead of a rotating color palette
+- A more durable image provider once the project needs to handle real (non-demo) user prompts
 
 Backend phase:
 - **Supabase/PostgreSQL** — replace `localStorage` with real, server-side persistence
 - **Real authentication** — Supabase Auth replacing the hardcoded mock user, with real per-user data isolation
 - **Real publishing/hosting** — a published app reachable from any browser, not just the creator's own `localStorage`
-- **Real image generation** — connect the Image Generator widget to an actual image API
 - Connect Chat Box to a real conversational flow
 - Login/onboarding pages
 - Possible migration of the canvas to React Flow + Zustand if visual connections become a priority
