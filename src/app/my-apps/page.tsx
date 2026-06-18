@@ -30,13 +30,17 @@ function byMostRecentlyUpdated(a: App, b: App): number {
 export default function MyAppsPage() {
   const [apps, setApps] = useState<App[]>([]);
 
-  // setState is inside startTransition callback (not directly in effect body)
-  // to satisfy the react-hooks/set-state-in-effect rule.
-  useEffect(() => {
+  function refresh() {
     const loaded = listApps();
     startTransition(() => {
       setApps(loaded);
     });
+  }
+
+  // setState is inside startTransition callback (not directly in effect body)
+  // to satisfy the react-hooks/set-state-in-effect rule.
+  useEffect(() => {
+    refresh();
   }, []);
 
   const drafts = apps.filter(a => a.status === 'draft').sort(byMostRecentlyUpdated);
@@ -79,7 +83,7 @@ export default function MyAppsPage() {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
               {drafts.map((app) => (
-                <AppCard key={app.id} app={app} />
+                <AppCard key={app.id} app={app} onChange={refresh} />
               ))}
             </div>
           )}
@@ -108,7 +112,7 @@ export default function MyAppsPage() {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
               {published.map((app) => (
-                <AppCard key={app.id} app={app} />
+                <AppCard key={app.id} app={app} onChange={refresh} />
               ))}
             </div>
           )}

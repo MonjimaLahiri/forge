@@ -1,9 +1,14 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { App } from '@/lib/types';
 import { THUMBNAIL_COLORS } from '@/lib/mock-data';
+import { saveApp, duplicateApp, deleteApp } from '@/lib/storage';
 
 interface AppCardProps {
   app: App;
+  onChange: () => void;
 }
 
 function formatDate(iso: string): string {
@@ -168,17 +173,66 @@ function ThumbnailArt({ thumbKey, color }: { thumbKey: string; color: string }) 
   );
 }
 
-export default function AppCard({ app }: AppCardProps) {
+export default function AppCard({ app, onChange }: AppCardProps) {
   const color = THUMBNAIL_COLORS[app.thumbnail] ?? '#2a2a2a';
   const dateLabel = app.status === 'published' && app.publishedAt
     ? `Published ${formatDate(app.publishedAt)}`
     : `Edited ${formatDate(app.updatedAt)}`;
 
+  const isPublished = app.status === 'published';
+  // Published apps open their public runtime view by default; editing moves
+  // into the overflow menu. Drafts keep opening straight into the builder.
+  const primaryHref = isPublished ? `/app/${app.id}` : `/builder/${app.id}`;
+  const primaryAriaLabel = isPublished ? `Open ${app.name}` : `Open ${app.name} in the builder`;
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close the menu on outside click or Escape.
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setMenuOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [menuOpen]);
+
+  function commitRename(value: string) {
+    setRenaming(false);
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === app.name) return;
+    saveApp(app.id, { name: trimmed });
+    onChange();
+  }
+
+  function handleDuplicate() {
+    setMenuOpen(false);
+    duplicateApp(app.id);
+    onChange();
+  }
+
+  function handleDelete() {
+    setMenuOpen(false);
+    if (!confirm(`Delete "${app.name}"? This cannot be undone.`)) return;
+    deleteApp(app.id);
+    onChange();
+  }
+
   return (
-    <article className="group relative bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden hover:border-[#3a3a3a] transition-colors">
-      {/* Thumbnail */}
+    <article className="group relative bg-[#161616] border border-[#2a2a2a] rounded-xl hover:border-[#3a3a3a] transition-colors">
+      {/* Thumbnail — clipped to the card's top corners. Overflow lives here,
+          not on the article, so the dropdown menu below isn't clipped too. */}
       <div
-        className="w-full aspect-[4/3]"
+        className="w-full aspect-[4/3] overflow-hidden rounded-t-xl"
         style={{ backgroundColor: `${color}18` }}
         aria-hidden="true"
       >
@@ -188,30 +242,94 @@ export default function AppCard({ app }: AppCardProps) {
       {/* Info */}
       <div className="p-3">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="relative z-10 text-sm font-medium text-[#f0f0f0] leading-snug line-clamp-1">
-            {app.name}
-          </h3>
-          {/* Overflow menu button */}
-          <button
-            type="button"
-            aria-label={`Options for ${app.name}`}
-            className="relative z-10 shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-[#6b7280] hover:text-[#f0f0f0] hover:bg-[#2a2a2a] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8]"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <circle cx="12" cy="5" r="1.5" />
-              <circle cx="12" cy="12" r="1.5" />
-              <circle cx="12" cy="19" r="1.5" />
-            </svg>
-          </button>
+          {renaming ? (
+            <input
+              autoFocus
+              defaultValue={app.name}
+              aria-label="App name"
+              className="relative z-20 w-full bg-[#0d0d0d] border border-[#1a73e8] rounded px-1.5 py-0.5 text-sm text-[#f0f0f0] outline-none"
+              onBlur={e => commitRename(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') commitRename(e.currentTarget.value);
+                if (e.key === 'Escape') setRenaming(false);
+              }}
+            />
+          ) : (
+            <h3 className="relative z-10 text-sm font-medium text-[#f0f0f0] leading-snug line-clamp-1">
+              {app.name}
+            </h3>
+          )}
+
+          {/* Overflow menu */}
+          <div ref={menuRef} className="relative z-20 shrink-0">
+            <button
+              type="button"
+              aria-label={`Options for ${app.name}`}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen(o => !o)}
+              className="w-6 h-6 flex items-center justify-center rounded-md text-[#6b7280] hover:text-[#f0f0f0] hover:bg-[#2a2a2a] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8]"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="12" cy="5" r="1.5" />
+                <circle cx="12" cy="12" r="1.5" />
+                <circle cx="12" cy="19" r="1.5" />
+              </svg>
+            </button>
+
+            {menuOpen && (
+              <div
+                role="menu"
+                aria-label={`Actions for ${app.name}`}
+                className="absolute right-0 top-7 w-36 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg shadow-xl py-1 z-30"
+              >
+                {isPublished && (
+                  <Link
+                    href={`/builder/${app.id}`}
+                    role="menuitem"
+                    onClick={() => setMenuOpen(false)}
+                    className="block w-full text-left px-3 py-1.5 text-xs text-[#d1d5db] hover:bg-[#242424] hover:text-[#f0f0f0] transition-colors focus-visible:outline-none focus-visible:bg-[#242424]"
+                  >
+                    Edit
+                  </Link>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => { setMenuOpen(false); setRenaming(true); }}
+                  className="w-full text-left px-3 py-1.5 text-xs text-[#d1d5db] hover:bg-[#242424] hover:text-[#f0f0f0] transition-colors focus-visible:outline-none focus-visible:bg-[#242424]"
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={handleDuplicate}
+                  className="w-full text-left px-3 py-1.5 text-xs text-[#d1d5db] hover:bg-[#242424] hover:text-[#f0f0f0] transition-colors focus-visible:outline-none focus-visible:bg-[#242424]"
+                >
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={handleDelete}
+                  className="w-full text-left px-3 py-1.5 text-xs text-[#f87171] hover:bg-[#2a1414] hover:text-[#fca5a5] transition-colors focus-visible:outline-none focus-visible:bg-[#2a1414]"
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         <p className="mt-1 text-xs text-[#6b7280]">{dateLabel}</p>
       </div>
 
-      {/* Full-card click target — opens the builder. Sits below the overflow
-          button (z-0 vs z-10) so the button stays independently clickable. */}
+      {/* Full-card click target — opens the builder for drafts, the public
+          runtime view for published apps. Sits below the title/menu
+          (z-0 vs z-10/z-20) so those stay independently clickable. */}
       <Link
-        href={`/builder/${app.id}`}
-        aria-label={`Open ${app.name} in the builder`}
+        href={primaryHref}
+        aria-label={primaryAriaLabel}
         className="absolute inset-0 z-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8] rounded-xl"
       />
     </article>

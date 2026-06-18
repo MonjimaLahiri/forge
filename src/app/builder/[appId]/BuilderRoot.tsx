@@ -4,14 +4,14 @@ import { useState, useRef, useEffect, startTransition, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { Widget, WidgetType } from '@/lib/types';
-import { getApp, createApp, saveApp } from '@/lib/storage';
+import { getApp, createApp, saveApp, publishApp } from '@/lib/storage';
 import { validateApp } from '@/lib/validateApp';
 import type { ValidationIssue } from '@/lib/validateApp';
 import Button from '@/components/ui/Button';
 import WidgetPalette from '@/components/builder/WidgetPalette';
 import WidgetCard from '@/components/builder/WidgetCard';
 import PropertiesPanel from '@/components/builder/PropertiesPanel';
-import PreviewWidget from '@/components/builder/PreviewWidget';
+import AppCanvas from '@/components/builder/AppCanvas';
 import ChecklistModal from '@/components/builder/ChecklistModal';
 
 // ─── Widget defaults ──────────────────────────────────────────────────────────
@@ -163,7 +163,6 @@ export default function BuilderRoot({ appId }: { appId: string }) {
   const [editingName, setEditingName]   = useState(false);
   const [saveStatus, setSaveStatus]     = useState<'saved' | 'saving'>('saved');
   const [isPreview, setIsPreview]       = useState(false);
-  const [runtimeValues, setRuntimeValues] = useState<Record<string, string>>({});
   const [showChecklist, setShowChecklist]             = useState(false);
   const [showPublish, setShowPublish]                 = useState(false);
   const [previewBannerDismissed, setPreviewBannerDismissed] = useState(false);
@@ -330,10 +329,6 @@ export default function BuilderRoot({ appId }: { appId: string }) {
 
   const selectedWidget = widgets.find(w => w.id === selectedId) ?? null;
 
-  // Derive a widgetId → title map so the resolver can use human names in warnings
-  const widgetTitles: Record<string, string> = {};
-  for (const w of widgets) widgetTitles[w.id] = w.title;
-
   // ── Preview mode ─────────────────────────────────────────────────────────
 
   if (isPreview) {
@@ -385,30 +380,7 @@ export default function BuilderRoot({ appId }: { appId: string }) {
         )}
 
         <div className="flex-1 overflow-auto">
-          {widgets.length === 0 ? (
-            <div className="flex items-center justify-center h-full min-h-[400px]">
-              <p className="text-sm text-[#4b5563]">No widgets on the canvas yet.</p>
-            </div>
-          ) : (
-            <div className="relative" style={{ minWidth: 1000, minHeight: 720 }}>
-              {widgets.map(w => (
-                <div
-                  key={w.id}
-                  className="absolute"
-                  style={{ left: w.x, top: w.y, width: w.w, minHeight: w.h }}
-                >
-                  <PreviewWidget
-                    widget={w}
-                    runtimeValues={runtimeValues}
-                    widgetTitles={widgetTitles}
-                    onValueChange={(id, value) =>
-                      setRuntimeValues(prev => ({ ...prev, [id]: value }))
-                    }
-                  />
-                </div>
-              ))}
-            </div>
-          )}
+          <AppCanvas widgets={widgets} />
         </div>
       </div>
     );
@@ -586,12 +558,14 @@ export default function BuilderRoot({ appId }: { appId: string }) {
           onClose={() => setShowChecklist(false)}
         />
       )}
-      {showPublish && (
+      {showPublish && currentAppId && (
         <ChecklistModal
           mode="publish"
           appName={appName}
           widgetCount={widgets.length}
           issues={issues}
+          appId={currentAppId}
+          onPublish={() => publishApp(currentAppId)}
           onClose={() => setShowPublish(false)}
         />
       )}

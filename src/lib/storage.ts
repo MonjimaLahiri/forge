@@ -110,3 +110,35 @@ export function saveApp(id: string, patch: Partial<Pick<App, 'name' | 'widgets'>
 export function deleteApp(id: string): void {
   writeApps(readApps().filter((a) => a.id !== id));
 }
+
+export function publishApp(id: string): App | null {
+  const apps = readApps();
+  const idx = apps.findIndex((a) => a.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  apps[idx] = { ...apps[idx], status: 'published', publishedAt: now, updatedAt: now };
+  writeApps(apps);
+  return apps[idx];
+}
+
+export function duplicateApp(id: string): App | null {
+  const apps = readApps();
+  const original = apps.find((a) => a.id === id);
+  if (!original) return null;
+
+  const now = new Date().toISOString();
+  const copy: App = {
+    ...original,
+    id: genId(),
+    name: `${original.name} Copy`,
+    status: 'draft',
+    thumbnail: pickThumbnail(apps.length),
+    createdAt: now,
+    updatedAt: now,
+    publishedAt: undefined,
+    // Deep clone so editing the copy can never mutate the original's widgets.
+    widgets: JSON.parse(JSON.stringify(original.widgets)),
+  };
+  writeApps([...apps, copy]);
+  return copy;
+}

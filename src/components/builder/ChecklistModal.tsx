@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import type { ValidationIssue } from '@/lib/validateApp';
 
 interface Props {
@@ -9,6 +10,8 @@ interface Props {
   widgetCount: number;
   issues: ValidationIssue[];
   onClose: () => void;
+  appId?: string;
+  onPublish?: () => void;
 }
 
 // ─── Issue row ─────────────────────────────────────────────────────────────────
@@ -44,7 +47,7 @@ function IssueRow({ issue }: { issue: ValidationIssue }) {
 
 // ─── ChecklistModal ────────────────────────────────────────────────────────────
 
-export default function ChecklistModal({ mode, appName, widgetCount, issues, onClose }: Props) {
+export default function ChecklistModal({ mode, appName, widgetCount, issues, onClose, appId, onPublish }: Props) {
   const [published, setPublished] = useState(false);
 
   const errors   = issues.filter(i => i.severity === 'error');
@@ -67,16 +70,27 @@ export default function ChecklistModal({ mode, appName, widgetCount, issues, onC
           </div>
 
           <div>
-            <h2 className="text-base font-semibold text-[#f0f0f0]">Mock publish complete</h2>
+            <h2 className="text-base font-semibold text-[#f0f0f0]">Published locally</h2>
             <p className="text-sm text-[#6b7280] mt-2 leading-relaxed">
-              Your app has been published locally. Real publishing — including a shareable URL and live AI connections — will be added in a later phase.
+              Your app is now viewable in its own runtime page, read from this browser&apos;s local storage. Real hosting and a shareable public URL will be added in a later phase.
             </p>
           </div>
+
+          {appId && (
+            <Link
+              href={`/app/${appId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full py-2 rounded-full text-sm font-semibold bg-[#D7F237] text-[#171717] hover:bg-[#c9e422] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D7F237]/50 text-center"
+            >
+              Open published app
+            </Link>
+          )}
 
           <button
             type="button"
             onClick={onClose}
-            className="w-full py-2 rounded-full text-sm font-semibold bg-[#1a73e8] text-white hover:bg-[#1557b0] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8]"
+            className="w-full py-2 rounded-full text-sm font-semibold bg-[#1f1f1f] border border-[#3a3a3a] text-[#e5e5e5] hover:bg-[#2a2a2a] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8]"
           >
             Done
           </button>
@@ -185,7 +199,7 @@ export default function ChecklistModal({ mode, appName, widgetCount, issues, onC
               </button>
               <button
                 type="button"
-                onClick={() => setPublished(true)}
+                onClick={() => { onPublish?.(); setPublished(true); }}
                 className="px-5 h-8 rounded-full text-xs font-semibold bg-[#D7F237] text-[#171717] hover:bg-[#c9e422] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D7F237]/50"
               >
                 Publish mock app
