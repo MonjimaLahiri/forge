@@ -12,6 +12,7 @@ export interface App {
   createdAt: string;
   updatedAt: string;
   publishedAt?: string;
+  widgets: Widget[];
 }
 
 export interface Template {

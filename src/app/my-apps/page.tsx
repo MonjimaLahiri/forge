@@ -1,8 +1,12 @@
+'use client';
+
+import { useEffect, useState, startTransition } from 'react';
 import AppShell from '@/components/layout/AppShell';
 import AppCard from '@/components/ui/AppCard';
 import EmptyState from '@/components/ui/EmptyState';
 import Button from '@/components/ui/Button';
-import { MOCK_DRAFT_APPS, MOCK_PUBLISHED_APPS } from '@/lib/mock-data';
+import { listApps } from '@/lib/storage';
+import type { App } from '@/lib/types';
 
 const PlusIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
@@ -19,9 +23,24 @@ const GridIcon = () => (
   </svg>
 );
 
+function byMostRecentlyUpdated(a: App, b: App): number {
+  return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+}
+
 export default function MyAppsPage() {
-  const drafts = MOCK_DRAFT_APPS;
-  const published = MOCK_PUBLISHED_APPS;
+  const [apps, setApps] = useState<App[]>([]);
+
+  // setState is inside startTransition callback (not directly in effect body)
+  // to satisfy the react-hooks/set-state-in-effect rule.
+  useEffect(() => {
+    const loaded = listApps();
+    startTransition(() => {
+      setApps(loaded);
+    });
+  }, []);
+
+  const drafts = apps.filter(a => a.status === 'draft').sort(byMostRecentlyUpdated);
+  const published = apps.filter(a => a.status === 'published').sort(byMostRecentlyUpdated);
 
   const topBar = (
     <>

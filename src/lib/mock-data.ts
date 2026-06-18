@@ -29,6 +29,7 @@ export const MOCK_DRAFT_APPS: App[] = [
     ownerId: 'mock_user',
     createdAt: '2026-05-10T09:00:00Z',
     updatedAt: '2026-06-12T14:30:00Z',
+    widgets: [],
   },
   {
     id: 'app_002',
@@ -39,6 +40,7 @@ export const MOCK_DRAFT_APPS: App[] = [
     ownerId: 'mock_user',
     createdAt: '2026-05-20T11:00:00Z',
     updatedAt: '2026-06-14T10:15:00Z',
+    widgets: [],
   },
   {
     id: 'app_003',
@@ -49,6 +51,7 @@ export const MOCK_DRAFT_APPS: App[] = [
     ownerId: 'mock_user',
     createdAt: '2026-06-01T08:00:00Z',
     updatedAt: '2026-06-15T16:00:00Z',
+    widgets: [],
   },
   {
     id: 'app_004',
@@ -59,6 +62,7 @@ export const MOCK_DRAFT_APPS: App[] = [
     ownerId: 'mock_user',
     createdAt: '2026-06-08T09:30:00Z',
     updatedAt: '2026-06-15T09:45:00Z',
+    widgets: [],
   },
   {
     id: 'app_005',
@@ -69,6 +73,7 @@ export const MOCK_DRAFT_APPS: App[] = [
     ownerId: 'mock_user',
     createdAt: '2026-06-16T08:00:00Z',
     updatedAt: '2026-06-16T08:00:00Z',
+    widgets: [],
   },
 ];
 
@@ -83,6 +88,7 @@ export const MOCK_PUBLISHED_APPS: App[] = [
     createdAt: '2026-04-01T10:00:00Z',
     updatedAt: '2026-04-28T12:00:00Z',
     publishedAt: '2026-04-28T13:00:00Z',
+    widgets: [],
   },
   {
     id: 'app_pub_002',
@@ -94,6 +100,7 @@ export const MOCK_PUBLISHED_APPS: App[] = [
     createdAt: '2026-03-15T08:00:00Z',
     updatedAt: '2026-05-10T14:00:00Z',
     publishedAt: '2026-05-10T15:00:00Z',
+    widgets: [],
   },
   {
     id: 'app_pub_003',
@@ -105,6 +112,7 @@ export const MOCK_PUBLISHED_APPS: App[] = [
     createdAt: '2026-05-01T09:00:00Z',
     updatedAt: '2026-05-20T10:00:00Z',
     publishedAt: '2026-05-20T11:00:00Z',
+    widgets: [],
   },
 ];
 

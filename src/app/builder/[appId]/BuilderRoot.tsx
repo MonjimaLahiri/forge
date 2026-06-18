@@ -2,8 +2,9 @@
 
 import { useState, useRef, useEffect, startTransition, useMemo } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { Widget, WidgetType } from '@/lib/types';
-import { saveDraft, loadDraft, clearDraft } from '@/lib/storage';
+import { getApp, createApp, saveApp } from '@/lib/storage';
 import { validateApp } from '@/lib/validateApp';
 import type { ValidationIssue } from '@/lib/validateApp';
 import Button from '@/components/ui/Button';
@@ -153,10 +154,12 @@ function SaveIndicator({ status }: { status: 'saved' | 'saving' }) {
 
 // ─── BuilderRoot ──────────────────────────────────────────────────────────────
 
-export default function BuilderRoot() {
+export default function BuilderRoot({ appId }: { appId: string }) {
+  const router = useRouter();
   const [widgets, setWidgets]           = useState<Widget[]>([]);
   const [selectedId, setSelectedId]     = useState<string | null>(null);
   const [appName, setAppName]           = useState(INITIAL_NAME);
+  const [currentAppId, setCurrentAppId] = useState<string | null>(null);
   const [editingName, setEditingName]   = useState(false);
   const [saveStatus, setSaveStatus]     = useState<'saved' | 'saving'>('saved');
   const [isPreview, setIsPreview]       = useState(false);
@@ -171,25 +174,48 @@ export default function BuilderRoot() {
   const saveTimer     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedJson = useRef(INITIAL_DRAFT_JSON);
 
-  // ── Load from localStorage after first render ────────────────────────────
+  // ── Load (or create) the app for this route after first render ──────────
   // setState is inside startTransition callback (not directly in effect body)
   // to satisfy the react-hooks/set-state-in-effect rule.
   useEffect(() => {
-    const draft = loadDraft();
-    if (!draft) return;
-    const { widgets: safeWidgets, idMap } = repairDuplicateIds(draft.widgets);
+    // "/builder/new" is the literal link every "Create New" button points to.
+    // Create the real app now and swap the URL to its real id.
+    if (appId === 'new') {
+      const created = createApp();
+      startTransition(() => {
+        setCurrentAppId(created.id);
+        setWidgets(created.widgets);
+        setAppName(created.name);
+        lastSavedJson.current = JSON.stringify({ name: created.name, widgets: created.widgets });
+      });
+      router.replace(`/builder/${created.id}`);
+      return;
+    }
+
+    const existing = getApp(appId);
+    if (!existing) {
+      // Stale or invalid id — nothing to edit, send the user back to their apps.
+      router.replace('/my-apps');
+      return;
+    }
+
+    const { widgets: safeWidgets, idMap } = repairDuplicateIds(existing.widgets);
     startTransition(() => {
+      setCurrentAppId(existing.id);
       setWidgets(safeWidgets);
-      setAppName(draft.name);
+      setAppName(existing.name);
       // If a repaired widget happened to be selected, point to its new id
       setSelectedId(prev => (prev !== null && idMap.has(prev)) ? (idMap.get(prev) ?? null) : prev);
-      lastSavedJson.current = JSON.stringify({ name: draft.name, widgets: safeWidgets });
+      lastSavedJson.current = JSON.stringify({ name: existing.name, widgets: safeWidgets });
     });
-  }, []);
+  }, [appId, router]);
 
   // ── Debounced auto-save whenever canvas changes ──────────────────────────
 
   useEffect(() => {
+    // Nothing to save into yet — the load/create effect hasn't resolved an app id.
+    if (!currentAppId) return;
+
     const current = JSON.stringify({ name: appName, widgets });
 
     // Nothing changed since last save — keep status 'saved' and skip
@@ -202,7 +228,7 @@ export default function BuilderRoot() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
 
     saveTimer.current = setTimeout(() => {
-      saveDraft({ name: appName, widgets });
+      saveApp(currentAppId, { name: appName, widgets });
       lastSavedJson.current = current;
       setSaveStatus('saved');
     }, 500);
@@ -210,7 +236,7 @@ export default function BuilderRoot() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [widgets, appName]);
+  }, [widgets, appName, currentAppId]);
 
   // ── Keyboard shortcuts (Escape = deselect, Delete/Backspace = delete) ────
 
@@ -257,7 +283,9 @@ export default function BuilderRoot() {
 
   function resetCanvas() {
     if (!confirm('Clear the canvas and start over? This cannot be undone.')) return;
-    clearDraft();
+    if (currentAppId) {
+      saveApp(currentAppId, { name: INITIAL_NAME, widgets: [] });
+    }
     setWidgets([]);
     setAppName(INITIAL_NAME);
     setSelectedId(null);

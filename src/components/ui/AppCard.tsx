@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import type { App } from '@/lib/types';
 import { THUMBNAIL_COLORS } from '@/lib/mock-data';
 
@@ -187,14 +188,14 @@ export default function AppCard({ app }: AppCardProps) {
       {/* Info */}
       <div className="p-3">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="text-sm font-medium text-[#f0f0f0] leading-snug line-clamp-1">
+          <h3 className="relative z-10 text-sm font-medium text-[#f0f0f0] leading-snug line-clamp-1">
             {app.name}
           </h3>
           {/* Overflow menu button */}
           <button
             type="button"
             aria-label={`Options for ${app.name}`}
-            className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-[#6b7280] hover:text-[#f0f0f0] hover:bg-[#2a2a2a] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8]"
+            className="relative z-10 shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-[#6b7280] hover:text-[#f0f0f0] hover:bg-[#2a2a2a] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8]"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <circle cx="12" cy="5" r="1.5" />
@@ -205,6 +206,14 @@ export default function AppCard({ app }: AppCardProps) {
         </div>
         <p className="mt-1 text-xs text-[#6b7280]">{dateLabel}</p>
       </div>
+
+      {/* Full-card click target — opens the builder. Sits below the overflow
+          button (z-0 vs z-10) so the button stays independently clickable. */}
+      <Link
+        href={`/builder/${app.id}`}
+        aria-label={`Open ${app.name} in the builder`}
+        className="absolute inset-0 z-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8] rounded-xl"
+      />
     </article>
   );
 }
