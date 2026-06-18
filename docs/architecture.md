@@ -22,26 +22,30 @@ This document explains how Forge is actually built today — not the original pl
 ```
 src/
   app/
-    page.tsx                      # redirects to /dashboard
+    page.tsx                       # redirects to /dashboard
     dashboard/page.tsx
-    my-apps/page.tsx
+    my-apps/page.tsx                # real saved apps, Drafts/Published
     discover/page.tsx, DiscoverClient.tsx
-    builder/[appId]/page.tsx, BuilderRoot.tsx   # appId is currently unused
-    api/generate-text/route.ts    # server-only Gemini integration
+    builder/[appId]/page.tsx, BuilderRoot.tsx   # editor — loads/saves the matching app
+    app/[appId]/page.tsx, RuntimeRoot.tsx       # public runtime view — no builder chrome
+    api/generate-text/route.ts      # server-only Gemini integration
 
   components/
     layout/        # Sidebar, TopBar, AppShell
-    builder/        # WidgetPalette, WidgetCard, PropertiesPanel, PreviewWidget, ChecklistModal
+    builder/        # WidgetPalette, WidgetCard, PropertiesPanel, PreviewWidget,
+                    # AppCanvas (shared run-mode renderer), ChecklistModal
     ui/             # Button, AppCard, EmptyState
 
   lib/
     types.ts        # Widget, App, Template, MockUser
-    mock-data.ts     # seeded apps/templates for Dashboard/My Apps/Discover
-    storage.ts       # localStorage draft save/load/clear
+    mock-data.ts     # seeded templates for Discover (+ thumbnail color palette)
+    storage.ts       # localStorage CRUD for the multi-app array, with legacy migration
     resolvePrompt.ts  # {{widgetId.value}} token resolution
     validateApp.ts    # readiness/validation checks
-    mockText.ts       # shared mock text generator (client fallback source of truth)
+    mockText.ts       # shared mock text generator (route + historical client fallback)
 ```
+
+Note: `src/app/app/[appId]/` is a literal route segment named `app` (so the URL is `/app/[appId]`) — unrelated to the Next.js `app/` *directory* convention at the project root. Slightly confusable name, intentional per the route the product spec asked for.
 
 ## Data Model
 
@@ -67,14 +71,36 @@ export interface Widget {
 }
 ```
 
-`App`/`Template`/`MockUser` types back the seeded Dashboard/My Apps/Discover data; they don't yet have a `widgets[]`/`connections[]` shape, because the builder doesn't persist per-app data yet (see Known Limitations in [`project-status.md`](project-status.md)).
+`App` is the persisted unit — one of these per saved app, whether draft or published:
+
+```typescript
+export interface App {
+  id: string;
+  name: string;
+  description: string;
+  status: 'draft' | 'published';
+  thumbnail: string;       // key into a fixed color palette, for the My Apps card
+  ownerId: string;         // always 'mock_user' — no real auth yet
+  createdAt: string;
+  updatedAt: string;
+  publishedAt?: string;    // set by publishApp()
+  widgets: Widget[];
+}
+```
+
+`Template`/`MockUser` remain seed-only types backing Discover's gallery and the hardcoded sidebar user — neither is wired to real persistence.
 
 ## State & Persistence
 
-- All builder state (widgets, selection, app name, save status, preview mode) lives in `BuilderRoot.tsx` via `useState`.
-- Auto-save is debounced 500ms after any change, writing `{ name, widgets }` to `localStorage` under a single key (`forge_builder_draft`) via `lib/storage.ts`.
-- On load, duplicate widget IDs are repaired (`repairDuplicateIds`) before hydrating state, guarding against stale/corrupted drafts from earlier sessions.
-- Dashboard/My Apps/Discover read from `lib/mock-data.ts` constants — entirely separate from the builder's `localStorage` draft. There is currently no bridge between "what's in the builder" and "what shows up in My Apps."
+- All builder state (widgets, selection, app name, save status, preview mode) lives in `BuilderRoot.tsx` via `useState`; the only thing it reads from outside is the `appId` route param.
+- `lib/storage.ts` is the single source of truth for persisted apps — one JSON array under `localStorage['forge_apps']`. Every function (`listApps`, `getApp`, `createApp`, `saveApp`, `duplicateApp`, `deleteApp`, `publishApp`) follows the same shape: read the whole array, mutate exactly one entry (or none, for create/list), write the whole array back with a single synchronous `localStorage.setItem`. There's no partial-write state to reason about.
+- **Loading an app:** `BuilderRoot` calls `getApp(appId)` on mount. If `appId === 'new'` (the literal link every "Create New" button points to), it calls `createApp()` instead and `router.replace`s the URL to the real generated id — so every other page in the app never needed to learn how to mint ids themselves.
+- **Saving an app:** debounced 500ms after any widget/name change, via `saveApp(id, { name, widgets })`, which always bumps `updatedAt`.
+- **Duplicating an app:** `duplicateApp(id)` deep-clones `widgets` (`JSON.parse(JSON.stringify(...))`) so the copy can never share array/object references with the original, assigns a new id, appends `" Copy"` to the name, and forces `status: 'draft'` regardless of the original's status.
+- **Publishing an app:** `publishApp(id)` is the only function that sets `status`/`publishedAt`; it's called once, when the user confirms in the publish modal — never from the autosave path, so there's no race between "saving edits" and "publishing."
+- **Migration:** an older single-draft format lived under `localStorage['forge_builder_draft']`. The first time `forge_apps` is read and doesn't exist yet, that legacy draft (if non-empty) is converted into the first entry of the new array, then the old key is removed. This runs at most once per browser.
+- On load, duplicate widget IDs are repaired (`repairDuplicateIds`) before hydrating state, guarding against stale/corrupted data from earlier sessions.
+- Dashboard/Discover still read from `lib/mock-data.ts` constants — entirely separate from real app storage. Only My Apps and the builder/runtime routes touch `forge_apps`.
 
 ## Builder Canvas
 
@@ -108,12 +134,17 @@ Widgets reference each other's runtime values through string tokens embedded in 
 
 These two systems are intentionally separate: validation gives proactive feedback while editing (readiness indicator, checklist modal), while resolution happens at the moment of generation and produces user-facing inline warnings rather than blocking the action.
 
+## Run-Mode Rendering: `AppCanvas`
+
+Both the builder's "Preview" toggle and the public `/app/[appId]` route need to render "this app's widgets, live, with no editing affordances." That logic — owning a `runtimeValues` map, deriving a widget-id-to-title lookup, laying out each widget absolutely, and wiring `PreviewWidget`'s callbacks — lives in exactly one place, `components/builder/AppCanvas.tsx`, and both call sites just pass `widgets`. The two call sites still own their own surrounding chrome separately (the builder's preview header has a dismissible validation-error banner and a "Back to Editor" link; the public route's header has a logo and an "Edit app" link instead) — those are legitimately different surfaces, so only the part with real shared logic was extracted.
+
 ## AI Integration Flow
 
 Only the Text Generator (`llm`) widget calls a real model. Sequence, end to end:
 
 ```
-User clicks "Generate" (PreviewWidget.tsx → LLMPreview)
+User clicks "Generate" (PreviewWidget.tsx → LLMPreview, reached via
+either BuilderRoot's preview mode or the public /app/[appId] route)
   │
   ├─ resolvePrompt(template, runtimeValues, widgetTitles)
   │     → resolved prompt string + warnings array (shown immediately)
@@ -141,7 +172,7 @@ User clicks "Generate" (PreviewWidget.tsx → LLMPreview)
 Key properties of this design:
 - **The API key never leaves the server.** It's read from `process.env.GEMINI_API_KEY` only inside the route handler.
 - **No SDK dependency.** The route uses the platform `fetch`, calling Gemini's REST endpoint directly — avoids an install for a single endpoint call.
-- **Identical behavior with or without a key.** The same `generateMockText()` (extracted to `lib/mockText.ts` so both the route and, historically, the client could share it) backs both the "no key" and "all models failed" paths, so demos and local dev without a key look the same as the documented fallback behavior.
+- **Identical behavior with or without a key.** The same `generateMockText()` (in `lib/mockText.ts`) backs both the "no key" and "all models failed" paths, so demos and local dev without a key look the same as the documented fallback behavior — and this holds in both the builder's preview and the published runtime page, since both go through the same `AppCanvas` → `PreviewWidget` → route path.
 - **A system instruction enforces output shape** (2–3 sentences, one version, no preamble) — done via Gemini's `systemInstruction` field rather than prompt-stuffing, keeping the user's own prompt untouched.
 
-Image Generator and Chat Box do not call any external API; their "generation" is local templated/randomized output with an artificial delay, explicitly to keep this phase scoped to one widget type.
+Image Generator and Chat Box do not call any external API; their "generation" is local templated/randomized output with an artificial delay, explicitly to keep AI integration scoped to one widget type so far.

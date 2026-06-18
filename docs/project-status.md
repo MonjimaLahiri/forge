@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: Phase 4 complete.
+Last updated: Phase 5 (Productization) Step 3 complete.
 
 ## Build Philosophy
 
@@ -9,13 +9,16 @@ Forge is built in phases, each one shippable and demoable on its own, rather tha
 1. **Phase 1** — static app shell and mock screens
 2. **Phase 2** — builder canvas with mock data
 3. **Phase 3** — widget properties and connections (prompt references)
-4. **Phase 4** — real AI integration (this phase)
-5. **Phase 5** — backend, auth, database, production AI infrastructure (not started)
+4. **Phase 4** — real AI integration
+5. **Phase 5 (Productization)** — turn the single-draft builder into a real multi-app product, still on `localStorage` only (this phase)
+6. **Backend phase (not started)** — Supabase/PostgreSQL, real auth, real hosting
+
+Note on naming: the original build plan called the backend/auth/database work "Phase 5." That work hasn't started yet — what's labeled "Phase 5" below is a productization arc inserted before it, intentionally still local-only, to prove out multi-app management and a publish flow before taking on a real backend.
 
 ## Completed Phases
 
 ### Phase 1 — Shell & mock screens
-Dashboard, My Apps, and Discover pages exist with seeded mock data (`lib/mock-data.ts`) and full navigation. **Gap from the original plan:** `/login` and `/onboarding` were never built — there is no auth placeholder at all, just a hardcoded mock user.
+Dashboard and Discover pages exist with seeded mock data (`lib/mock-data.ts`) and full navigation. **Gap from the original plan:** `/login` and `/onboarding` were never built — there is no auth placeholder at all, just a hardcoded mock user.
 
 ### Phase 2 — Builder canvas
 A working canvas where widgets can be added from a palette, dragged, selected, and deleted. Built with plain absolutely-positioned `div`s and manual mouse-event handlers rather than React Flow (see [`architecture.md`](architecture.md) for why).
@@ -37,11 +40,31 @@ A working canvas where widgets can be added from a palette, dragged, selected, a
 - UI shows a small "Generated with Gemini" / "Mock output" label, a "Generating with Gemini…" loading state, and a friendly amber notice when Gemini failed and the mock silently took over
 - Image Generator and Chat Box were **explicitly left mocked** in this phase — only the Text Generator widget is wired to a real model
 
+### Phase 5 Step 1 — Multi-app local storage
+- Replaced the single `forge_builder_draft` key with one array under `forge_apps`, each entry a full `App` (id, name, status, `widgets[]`, timestamps)
+- `lib/storage.ts`: `listApps`, `getApp`, `createApp`, `saveApp`
+- "Create New" generates a real unique id; `/builder/[appId]` now actually loads/saves the matching app instead of ignoring the route param
+- Old single-draft data auto-migrates into the new array the first time it's read, then the legacy key is removed
+- My Apps renders real saved apps (via `AppCard`) instead of `MOCK_DRAFT_APPS`/`MOCK_PUBLISHED_APPS`
+
+### Phase 5 Step 2 — App management
+- My Apps card overflow menu: **Rename** (inline, same pattern as the builder header), **Duplicate** (deep-cloned widgets, new id, forced back to `draft`), **Delete** (confirmation required)
+- `lib/storage.ts`: added `duplicateApp`
+- Fixed a UI bug where the dropdown menu was clipped by the card's `overflow-hidden` — moved that property to just the thumbnail element
+
+### Phase 5 Step 3 — Public app route and mock publishing
+- `lib/storage.ts`: added `publishApp` (sets `status: 'published'`, stamps `publishedAt`)
+- Publish button → readiness modal → confirming now actually persists the status change (previously a no-op UI mock) and surfaces an **"Open published app"** link
+- New route `/app/[appId]` (`RuntimeRoot.tsx`): loads the app from storage, renders it with no builder chrome at all — just a small header (logo + "Edit app" link) and the live widgets
+- Extracted the widget-rendering logic shared by builder Preview mode and the new public route into `components/builder/AppCanvas.tsx`, so there's one implementation of "run this app's widgets," not two
+- My Apps: published apps now open `/app/[id]` (view) by default, with an "Edit" item added to the card menu so publishing doesn't lock the app out of further edits
+
 ## Feature Matrix
 
 | Feature | Status | Notes |
 |---|---|---|
-| Dashboard / My Apps / Discover navigation | ✅ Built | Seeded mock data, not live persistence |
+| Dashboard / Discover navigation | ✅ Built | Seeded mock data, not live persistence |
+| **My Apps** | ✅ Built | Real saved apps, Drafts/Published split, rename/duplicate/delete |
 | Add/drag/select/delete widgets | ✅ Built | Custom canvas, not React Flow |
 | Widget properties panel | ✅ Built | All 5 widget types |
 | Prompt reference system | ✅ Built | `{{widgetId.value}}` tokens |
@@ -50,37 +73,38 @@ A working canvas where widgets can be added from a palette, dragged, selected, a
 | Text Generator → real AI | ✅ Built | Gemini, server-side, 3-model fallback chain |
 | Image Generator | 🟡 Mocked | CSS/SVG gradient placeholder, explicitly not connected to any API |
 | Chat Box | 🟡 Mocked | Keyword-based canned replies |
-| Auto-save | ✅ Built | Single global draft in `localStorage`, debounced 500ms |
-| Multi-app persistence | ❌ Not built | `[appId]` route param exists but is ignored |
+| **Multi-app persistence** | ✅ Built | One `localStorage` array, each app independent |
+| **Rename / Duplicate / Delete** | ✅ Built | From My Apps card menu and builder header (rename) |
+| **Mock publish flow** | ✅ Built | Real local status change, not real hosting |
+| **Public runtime route** (`/app/[appId]`) | ✅ Built | No builder chrome, reads from `localStorage` |
 | Login / onboarding | ❌ Not built | Hardcoded mock user |
-| Real publish flow | ❌ Not built | Checklist modal placeholder only |
-| Database / Supabase | ❌ Not built | Phase 5 |
-| Real auth | ❌ Not built | Phase 5 |
+| Database / Supabase | ❌ Not built | Backend phase |
+| Real auth | ❌ Not built | Backend phase |
+| Real hosting for published apps | ❌ Not built | Currently local-browser-only |
 | React Flow / Zustand | ❌ Not adopted | Custom canvas + local state used instead |
 
 ## Known Limitations
 
-- **Single global draft, not multi-app.** The builder route is `/builder/[appId]`, but `BuilderRoot.tsx` ignores the `appId` param entirely and always reads/writes one `localStorage` key (`forge_builder_draft`). "Create New" always opens the same draft slot.
-- **My Apps and Discover are static.** They render `MOCK_DRAFT_APPS`, `MOCK_PUBLISHED_APPS`, and `MOCK_TEMPLATES` from `lib/mock-data.ts`. Deleting, editing, or publishing an app there doesn't touch real state.
-- **No auth.** The sidebar greets a hardcoded "Alex." There's no session, no login form, no per-user data isolation.
-- **Publish is a placeholder.** Clicking Publish opens a checklist modal; it does not change any app's status or make anything accessible outside the builder.
+- **No auth.** The sidebar greets a hardcoded "Alex." There's no session, no login form, no per-user data isolation — anyone using the same browser sees the same apps.
+- **"Published" isn't really public.** `/app/[appId]` reads from the current browser's `localStorage`, so the URL only resolves for whoever has that app saved locally. There's no server-side copy, no real shareable link yet.
+- **Discover is still static.** Templates are seeded mock data; "Use template" links to `/builder/new` but doesn't actually clone the template's content into the new app.
 - **Widget connections are textual, not visual.** There are no graph edges between widgets — references live inside prompt strings as `{{id.value}}` tokens, validated but not drawn.
-- **Image Generator and Chat Box are fully mocked.** No real image generation API and no real conversational AI are wired up yet, by design for this phase.
+- **Image Generator and Chat Box are fully mocked.** No real image generation API and no real conversational AI are wired up yet, by design.
 - **No undo/redo, no responsive/mobile builder layout, no multi-page apps** — all explicitly out of scope per the build plan.
-- **localStorage has practical size limits** (~5MB) that haven't been addressed; not a problem yet at this scale.
+- **localStorage has practical size limits** (~5MB) that haven't been addressed; not a problem yet at this scale, but will be the forcing function for the backend phase.
 
-## Future Improvements (Roadmap)
+## Future Roadmap
 
-Near-term (extends current architecture, no Phase 5 dependencies):
-- Per-app persistence keyed by `appId`, so the builder route param is actually used
-- Real `/preview/[appId]` route instead of an in-component mode toggle
-- Wire My Apps delete/edit/preview actions to real saved-app state
-- Real publish flow: flip `status` to `published`, set `publishedAt`, surface in My Apps
-- Connect Image Generator to a real image API, Chat Box to a real conversational flow
+Near-term (still local-only, extends current architecture):
+- Wire Discover's "Use template" into real app creation (clone seeded widgets into a new app)
+- Per-app thumbnails reflecting actual widget content instead of a rotating color palette
 
-Longer-term (Phase 5):
-- Supabase/PostgreSQL backend
-- Real authentication (replacing the mock user)
-- Login/onboarding flow
+Backend phase:
+- **Supabase/PostgreSQL** — replace `localStorage` with real, server-side persistence
+- **Real authentication** — Supabase Auth replacing the hardcoded mock user, with real per-user data isolation
+- **Real publishing/hosting** — a published app reachable from any browser, not just the creator's own `localStorage`
+- **Real image generation** — connect the Image Generator widget to an actual image API
+- Connect Chat Box to a real conversational flow
+- Login/onboarding pages
 - Possible migration of the canvas to React Flow + Zustand if visual connections become a priority
 - Zod schema validation at system boundaries
