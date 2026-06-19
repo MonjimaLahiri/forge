@@ -5,7 +5,8 @@ import AppShell from '@/components/layout/AppShell';
 import AppCard from '@/components/ui/AppCard';
 import EmptyState from '@/components/ui/EmptyState';
 import Button from '@/components/ui/Button';
-import { listApps } from '@/lib/appStore';
+import ImportLocalAppsBanner from '@/components/ui/ImportLocalAppsBanner';
+import { listApps, getLocalAppsPendingImport } from '@/lib/appStore';
 import type { App } from '@/lib/types';
 
 const PlusIcon = () => (
@@ -29,6 +30,8 @@ function byMostRecentlyUpdated(a: App, b: App): number {
 
 export default function MyAppsPage() {
   const [apps, setApps] = useState<App[]>([]);
+  const [pendingImport, setPendingImport] = useState<App[]>([]);
+  const [importBannerDismissed, setImportBannerDismissed] = useState(false);
 
   function refresh() {
     listApps().then((loaded) => {
@@ -38,10 +41,19 @@ export default function MyAppsPage() {
     });
   }
 
+  function checkPendingImport() {
+    getLocalAppsPendingImport().then((pending) => {
+      startTransition(() => {
+        setPendingImport(pending);
+      });
+    });
+  }
+
   // setState is inside startTransition callback (not directly in effect body)
   // to satisfy the react-hooks/set-state-in-effect rule.
   useEffect(() => {
     refresh();
+    checkPendingImport();
   }, []);
 
   const drafts = apps.filter(a => a.status === 'draft').sort(byMostRecentlyUpdated);
@@ -57,6 +69,14 @@ export default function MyAppsPage() {
   return (
     <AppShell topBar={topBar}>
       <div className="px-8 py-8 space-y-10">
+        {pendingImport.length > 0 && !importBannerDismissed && (
+          <ImportLocalAppsBanner
+            apps={pendingImport}
+            onDismiss={() => setImportBannerDismissed(true)}
+            onImported={refresh}
+          />
+        )}
+
         {/* Drafts section */}
         <section aria-labelledby="drafts-heading">
           <div className="flex items-center justify-between mb-4">

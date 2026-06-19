@@ -120,6 +120,30 @@ export async function publishApp(id: string): Promise<App | null> {
   return data ? rowToApp(data as AppRow) : null;
 }
 
+// Migrates one local app into the cloud, reusing its existing id (both are
+// standard UUIDs) and original timestamps — this is a copy of existing data,
+// not a fresh creation, so created/updated/published history is preserved
+// rather than reset to "now". Reusing the id also means a second attempt at
+// importing the same app fails on the primary key constraint instead of
+// creating a duplicate row.
+export async function importApp(app: App, userId: string): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from('apps').insert({
+    id: app.id,
+    user_id: userId,
+    name: app.name,
+    description: app.description,
+    status: app.status,
+    thumbnail: app.thumbnail,
+    widgets: app.widgets,
+    created_at: app.createdAt,
+    updated_at: app.updatedAt,
+    published_at: app.publishedAt ?? null,
+  });
+
+  if (error) throw error;
+}
+
 export async function duplicateApp(id: string, userId: string): Promise<App | null> {
   const original = await getApp(id);
   if (!original) return null;

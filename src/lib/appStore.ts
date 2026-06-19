@@ -64,3 +64,48 @@ export async function duplicateApp(id: string): Promise<App | null> {
   if (!userId) return local.duplicateApp(id);
   return cloud.duplicateApp(id, userId);
 }
+
+// ── Local-to-cloud import (Phase 6.5) ──────────────────────────────────────
+
+// Local apps not yet present in the signed-in user's cloud apps. Returns []
+// when logged out (nothing to import yet) or when there's nothing pending —
+// recomputed fresh each call, so a successfully imported app naturally drops
+// out next time rather than needing a separate "already imported" flag.
+export async function getLocalAppsPendingImport(): Promise<App[]> {
+  const userId = await getUserId();
+  if (!userId) return [];
+
+  const localApps = local.listApps();
+  if (localApps.length === 0) return [];
+
+  const cloudApps = await cloud.listApps(userId);
+  const cloudIds = new Set(cloudApps.map((a) => a.id));
+  return localApps.filter((a) => !cloudIds.has(a.id));
+}
+
+export interface ImportResult {
+  imported: App[];
+  failed: App[];
+}
+
+// Imports each app independently — one failure doesn't block the rest, and a
+// failed app simply stays "pending" (still in localStorage, untouched) to be
+// offered again later. Never deletes anything from localStorage.
+export async function importLocalApps(apps: App[]): Promise<ImportResult> {
+  const userId = await getUserId();
+  if (!userId) return { imported: [], failed: apps };
+
+  const imported: App[] = [];
+  const failed: App[] = [];
+
+  for (const app of apps) {
+    try {
+      await cloud.importApp(app, userId);
+      imported.push(app);
+    } catch {
+      failed.push(app);
+    }
+  }
+
+  return { imported, failed };
+}
