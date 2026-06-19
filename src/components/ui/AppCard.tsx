@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { App } from '@/lib/types';
 import { THUMBNAIL_COLORS } from '@/lib/mock-data';
-import { saveApp, duplicateApp, deleteApp } from '@/lib/storage';
+import { saveApp, duplicateApp, deleteApp } from '@/lib/appStore';
 
 interface AppCardProps {
   app: App;
@@ -206,24 +206,24 @@ export default function AppCard({ app, onChange }: AppCardProps) {
     };
   }, [menuOpen]);
 
-  function commitRename(value: string) {
+  async function commitRename(value: string) {
     setRenaming(false);
     const trimmed = value.trim();
     if (!trimmed || trimmed === app.name) return;
-    saveApp(app.id, { name: trimmed });
+    await saveApp(app.id, { name: trimmed });
     onChange();
   }
 
-  function handleDuplicate() {
+  async function handleDuplicate() {
     setMenuOpen(false);
-    duplicateApp(app.id);
+    await duplicateApp(app.id);
     onChange();
   }
 
-  function handleDelete() {
+  async function handleDelete() {
     setMenuOpen(false);
     if (!confirm(`Delete "${app.name}"? This cannot be undone.`)) return;
-    deleteApp(app.id);
+    await deleteApp(app.id);
     onChange();
   }
 

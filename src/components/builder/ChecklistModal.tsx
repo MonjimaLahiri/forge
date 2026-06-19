@@ -11,7 +11,7 @@ interface Props {
   issues: ValidationIssue[];
   onClose: () => void;
   appId?: string;
-  onPublish?: () => void;
+  onPublish?: () => void | Promise<void>;
 }
 
 // ─── Issue row ─────────────────────────────────────────────────────────────────
@@ -199,7 +199,15 @@ export default function ChecklistModal({ mode, appName, widgetCount, issues, onC
               </button>
               <button
                 type="button"
-                onClick={() => { onPublish?.(); setPublished(true); }}
+                onClick={async () => {
+                  try {
+                    await onPublish?.();
+                    setPublished(true);
+                  } catch {
+                    // Publish failed (e.g. a cloud write error) — stay on this
+                    // screen rather than show a false success state.
+                  }
+                }}
                 className="px-5 h-8 rounded-full text-xs font-semibold bg-[#D7F237] text-[#171717] hover:bg-[#c9e422] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D7F237]/50"
               >
                 Publish mock app

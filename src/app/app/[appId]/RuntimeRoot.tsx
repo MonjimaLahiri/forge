@@ -3,12 +3,15 @@
 import { useEffect, useState, startTransition } from 'react';
 import Link from 'next/link';
 import type { App } from '@/lib/types';
-import { getApp } from '@/lib/storage';
+import { getApp } from '@/lib/appStore';
 import AppCanvas from '@/components/builder/AppCanvas';
 
 // Public runtime view for a published app — no builder chrome, no properties
 // panel, no widget palette. Just the app's widgets, live (Gemini-connected
-// Text Generator, mocked Image/Chat), read directly from local storage.
+// Text Generator, mocked Image/Chat). Reads from Supabase if the viewer is
+// logged in, localStorage otherwise — see lib/appStore.ts. Note: this means
+// a logged-out visitor still can't view someone else's published app from a
+// different browser; that cross-device case isn't solved until a later step.
 export default function RuntimeRoot({ appId }: { appId: string }) {
   const [app, setApp] = useState<App | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -16,11 +19,15 @@ export default function RuntimeRoot({ appId }: { appId: string }) {
   // setState is inside startTransition callback (not directly in effect body)
   // to satisfy the react-hooks/set-state-in-effect rule.
   useEffect(() => {
-    const found = getApp(appId);
-    startTransition(() => {
-      setApp(found);
-      setLoaded(true);
+    let cancelled = false;
+    getApp(appId).then((found) => {
+      if (cancelled) return;
+      startTransition(() => {
+        setApp(found);
+        setLoaded(true);
+      });
     });
+    return () => { cancelled = true; };
   }, [appId]);
 
   if (!loaded) {

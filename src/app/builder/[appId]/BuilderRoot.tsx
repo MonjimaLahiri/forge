@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, startTransition, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { Widget, WidgetType } from '@/lib/types';
-import { getApp, createApp, saveApp, publishApp } from '@/lib/storage';
+import { getApp, createApp, saveApp, publishApp } from '@/lib/appStore';
 import { validateApp } from '@/lib/validateApp';
 import type { ValidationIssue } from '@/lib/validateApp';
 import Button from '@/components/ui/Button';
@@ -134,11 +134,23 @@ function ReadinessIndicator({ issues, onClick }: { issues: ValidationIssue[]; on
 
 // ─── Save status indicator ────────────────────────────────────────────────────
 
-function SaveIndicator({ status }: { status: 'saved' | 'saving' }) {
+function SaveIndicator({ status }: { status: 'saved' | 'saving' | 'error' }) {
   if (status === 'saving') {
     return (
       <span className="text-xs text-[#6b7280] tabular-nums" aria-live="polite">
         Saving…
+      </span>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <span className="text-xs text-[#fca5a5] flex items-center gap-1" aria-live="polite">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="8" x2="12" y2="12" />
+          <line x1="12" y1="16" x2="12.01" y2="16" />
+        </svg>
+        Save failed
       </span>
     );
   }
@@ -147,7 +159,7 @@ function SaveIndicator({ status }: { status: 'saved' | 'saving' }) {
       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <polyline points="20 6 9 17 4 12" />
       </svg>
-      Saved locally
+      Saved
     </span>
   );
 }
@@ -161,7 +173,7 @@ export default function BuilderRoot({ appId }: { appId: string }) {
   const [appName, setAppName]           = useState(INITIAL_NAME);
   const [currentAppId, setCurrentAppId] = useState<string | null>(null);
   const [editingName, setEditingName]   = useState(false);
-  const [saveStatus, setSaveStatus]     = useState<'saved' | 'saving'>('saved');
+  const [saveStatus, setSaveStatus]     = useState<'saved' | 'saving' | 'error'>('saved');
   const [isPreview, setIsPreview]       = useState(false);
   const [showChecklist, setShowChecklist]             = useState(false);
   const [showPublish, setShowPublish]                 = useState(false);
@@ -177,36 +189,45 @@ export default function BuilderRoot({ appId }: { appId: string }) {
   // setState is inside startTransition callback (not directly in effect body)
   // to satisfy the react-hooks/set-state-in-effect rule.
   useEffect(() => {
-    // "/builder/new" is the literal link every "Create New" button points to.
-    // Create the real app now and swap the URL to its real id.
-    if (appId === 'new') {
-      const created = createApp();
+    let cancelled = false;
+
+    async function load() {
+      // "/builder/new" is the literal link every "Create New" button points to.
+      // Create the real app now and swap the URL to its real id.
+      if (appId === 'new') {
+        const created = await createApp();
+        if (cancelled) return;
+        startTransition(() => {
+          setCurrentAppId(created.id);
+          setWidgets(created.widgets);
+          setAppName(created.name);
+          lastSavedJson.current = JSON.stringify({ name: created.name, widgets: created.widgets });
+        });
+        router.replace(`/builder/${created.id}`);
+        return;
+      }
+
+      const existing = await getApp(appId);
+      if (cancelled) return;
+      if (!existing) {
+        // Stale or invalid id — nothing to edit, send the user back to their apps.
+        router.replace('/my-apps');
+        return;
+      }
+
+      const { widgets: safeWidgets, idMap } = repairDuplicateIds(existing.widgets);
       startTransition(() => {
-        setCurrentAppId(created.id);
-        setWidgets(created.widgets);
-        setAppName(created.name);
-        lastSavedJson.current = JSON.stringify({ name: created.name, widgets: created.widgets });
+        setCurrentAppId(existing.id);
+        setWidgets(safeWidgets);
+        setAppName(existing.name);
+        // If a repaired widget happened to be selected, point to its new id
+        setSelectedId(prev => (prev !== null && idMap.has(prev)) ? (idMap.get(prev) ?? null) : prev);
+        lastSavedJson.current = JSON.stringify({ name: existing.name, widgets: safeWidgets });
       });
-      router.replace(`/builder/${created.id}`);
-      return;
     }
 
-    const existing = getApp(appId);
-    if (!existing) {
-      // Stale or invalid id — nothing to edit, send the user back to their apps.
-      router.replace('/my-apps');
-      return;
-    }
-
-    const { widgets: safeWidgets, idMap } = repairDuplicateIds(existing.widgets);
-    startTransition(() => {
-      setCurrentAppId(existing.id);
-      setWidgets(safeWidgets);
-      setAppName(existing.name);
-      // If a repaired widget happened to be selected, point to its new id
-      setSelectedId(prev => (prev !== null && idMap.has(prev)) ? (idMap.get(prev) ?? null) : prev);
-      lastSavedJson.current = JSON.stringify({ name: existing.name, widgets: safeWidgets });
-    });
+    load();
+    return () => { cancelled = true; };
   }, [appId, router]);
 
   // ── Debounced auto-save whenever canvas changes ──────────────────────────
@@ -226,10 +247,14 @@ export default function BuilderRoot({ appId }: { appId: string }) {
     setSaveStatus('saving');
     if (saveTimer.current) clearTimeout(saveTimer.current);
 
-    saveTimer.current = setTimeout(() => {
-      saveApp(currentAppId, { name: appName, widgets });
-      lastSavedJson.current = current;
-      setSaveStatus('saved');
+    saveTimer.current = setTimeout(async () => {
+      try {
+        await saveApp(currentAppId, { name: appName, widgets });
+        lastSavedJson.current = current;
+        setSaveStatus('saved');
+      } catch {
+        setSaveStatus('error');
+      }
     }, 500);
 
     return () => {
@@ -280,16 +305,23 @@ export default function BuilderRoot({ appId }: { appId: string }) {
     setSelectedId(null);
   }
 
-  function resetCanvas() {
+  async function resetCanvas() {
     if (!confirm('Clear the canvas and start over? This cannot be undone.')) return;
-    if (currentAppId) {
-      saveApp(currentAppId, { name: INITIAL_NAME, widgets: [] });
-    }
     setWidgets([]);
     setAppName(INITIAL_NAME);
     setSelectedId(null);
     lastSavedJson.current = INITIAL_DRAFT_JSON;
-    setSaveStatus('saved');
+    if (!currentAppId) {
+      setSaveStatus('saved');
+      return;
+    }
+    setSaveStatus('saving');
+    try {
+      await saveApp(currentAppId, { name: INITIAL_NAME, widgets: [] });
+      setSaveStatus('saved');
+    } catch {
+      setSaveStatus('error');
+    }
   }
 
   // ── Drag ────────────────────────────────────────────────────────────────
@@ -565,7 +597,7 @@ export default function BuilderRoot({ appId }: { appId: string }) {
           widgetCount={widgets.length}
           issues={issues}
           appId={currentAppId}
-          onPublish={() => publishApp(currentAppId)}
+          onPublish={async () => { await publishApp(currentAppId); }}
           onClose={() => setShowPublish(false)}
         />
       )}

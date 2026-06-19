@@ -5,7 +5,7 @@ import AppShell from '@/components/layout/AppShell';
 import AppCard from '@/components/ui/AppCard';
 import EmptyState from '@/components/ui/EmptyState';
 import Button from '@/components/ui/Button';
-import { listApps } from '@/lib/storage';
+import { listApps } from '@/lib/appStore';
 import type { App } from '@/lib/types';
 
 const PlusIcon = () => (
@@ -31,9 +31,10 @@ export default function MyAppsPage() {
   const [apps, setApps] = useState<App[]>([]);
 
   function refresh() {
-    const loaded = listApps();
-    startTransition(() => {
-      setApps(loaded);
+    listApps().then((loaded) => {
+      startTransition(() => {
+        setApps(loaded);
+      });
     });
   }
 
