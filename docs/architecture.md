@@ -11,7 +11,8 @@ This document explains how Forge is actually built today — not the original pl
 | Language | TypeScript | Used everywhere, including the API route |
 | Styling | Tailwind CSS v4 | CSS-first config via `@theme` in `globals.css`, no `tailwind.config.js` |
 | AI providers | Google Gemini API (text), Pollinations.ai (image) | Both called via raw `fetch`, no SDK; Pollinations needs no API key |
-| Persistence | `localStorage` | No database yet |
+| Auth & Database | Supabase (Auth + Postgres, `@supabase/ssr`) | Email/password auth, password reset, Row Level Security; see "Authentication & Profile System" below |
+| Persistence | Supabase (logged in) or `localStorage` (logged out) | Auth-aware dispatcher (`lib/appStore.ts`) — see "Cloud vs. Local App Storage" below |
 | State | Local React `useState`/`useRef` | No global store (Zustand) yet |
 | Canvas | Hand-built absolute positioning | No React Flow yet |
 
@@ -30,17 +31,26 @@ src/
     app/[appId]/page.tsx, RuntimeRoot.tsx       # public runtime view — no builder chrome
     api/generate-text/route.ts      # server-only Gemini integration
     api/generate-image/route.ts     # server-only Pollinations.ai integration
+    login/page.tsx, signup/page.tsx
+    forgot-password/page.tsx, reset-password/page.tsx
+    profile-setup/page.tsx          # username + avatar, required after first login
 
   components/
-    layout/        # Sidebar, TopBar, AppShell
+    layout/        # Sidebar, TopBar, AppShell, Greeting (real identity)
     builder/        # WidgetPalette, WidgetCard, PropertiesPanel, PreviewWidget,
                     # AppCanvas (shared run-mode renderer), ChecklistModal
-    ui/             # Button, AppCard, EmptyState
+    ui/             # Button, AppCard, EmptyState, PasswordInput, ImportLocalAppsBanner
 
   lib/
     types.ts        # Widget, App, Template, MockUser
     mock-data.ts     # seeded templates for Discover (+ thumbnail color palette)
     storage.ts       # localStorage CRUD for the multi-app array, with legacy migration
+    cloudStorage.ts   # Supabase-backed equivalent of storage.ts's 7 operations
+    appStore.ts       # auth-aware dispatcher: storage.ts vs. cloudStorage.ts
+    profile.ts        # profiles table CRUD + post-auth redirect logic
+    useIdentity.ts     # auth state + profile, consumed by Greeting/Sidebar
+    avatars.ts         # fixed 8-emoji avatar presets (no uploads, no storage bucket)
+    supabase/client.ts, supabase/server.ts   # browser/server Supabase clients
     resolvePrompt.ts  # {{widgetId.value}} token resolution
     validateApp.ts    # readiness/validation checks
     mockText.ts       # shared mock text generator (route + historical client fallback)
@@ -114,16 +124,16 @@ Two surfaces read `status` and need no separate logic to stay correct:
 - **My Apps** filters `listApps()` into Drafts/Published purely by `status` — an app demoted by `saveApp` moves sections on the very next read.
 - **`/app/[appId]`** (`RuntimeRoot.tsx`) checks `app.status === 'published'` before rendering. If the app exists but isn't published (either never published, or demoted by a later edit), it shows "This app is not currently published." with a link back to `/builder/[appId]`, instead of silently serving a stale runtime view.
 
-## Supabase Schema (Phase 6.3 — not yet connected)
+## Supabase Schema (Phase 6 — connected)
 
-The full SQL lives in [`docs/supabase-schema.sql`](supabase-schema.sql), meant to be run once in the Supabase Dashboard's SQL Editor. As of this phase, nothing in the app calls these tables — the builder and My Apps still read/write `localStorage` exclusively, exactly as described above. This is schema-and-policy groundwork for a later phase that actually wires up persistence.
+The full SQL lives in [`docs/supabase-schema.sql`](supabase-schema.sql), meant to be run once in the Supabase Dashboard's SQL Editor. As of Phase 6, the app actually calls these tables: `src/lib/cloudStorage.ts` for apps, `src/lib/profile.ts` for profiles, both gated behind real Supabase Auth sessions.
 
 **Schema:** two tables, deliberately mirroring shapes that already exist in code rather than inventing a new model:
 - `profiles` mirrors the identity half of `MockUser` — `id` (same uuid as the Supabase auth user, not a separate generated id), `display_name`, `avatar_index`, `created_at`. One row per user, created automatically (see trigger below), never inserted by the user directly.
 - `apps` mirrors `App` from `lib/types.ts` almost field-for-field — `status` is constrained to `'draft' | 'published'` via a `check` constraint, the same two states the local version uses. `widgets` stays one `jsonb` column rather than a normalized table, because Forge never queries into individual widgets — they're only ever read/written as one full array per app, both locally and (eventually) remotely, so normalizing would add joins for no benefit.
 
 **RLS strategy:** both tables have Row Level Security enabled, with narrow, single-purpose policies rather than one broad rule per table:
-- `profiles`: `select`/`update` are restricted to `auth.uid() = id`. There's intentionally no `insert` policy — profile rows only ever come from the `handle_new_user()` trigger, which runs as `SECURITY DEFINER` and bypasses RLS entirely, since a brand-new user has no rows (and therefore no RLS grant) yet to authorize an insert against.
+- `profiles`: `select`/`update` are restricted to `auth.uid() = id`. Profile rows are normally created by the `handle_new_user()` trigger (`SECURITY DEFINER`, bypasses RLS) the moment a new account exists. An `insert` policy (`auth.uid() = id`) was added afterward as a backfill path: any account created before this trigger existed has no row at all, and `saveProfile()` upserts rather than updates for exactly that reason — see "Authentication & Profile System" below.
 - `apps`: four ownership policies (`select`/`insert`/`update`/`delete`, all keyed on `auth.uid() = user_id`), plus one additional `select` policy with no ownership check at all: `using (status = 'published')`. Postgres unions multiple permissive policies for the same command with `OR`, so the effective read rule becomes "you can see a row if you own it, **or** if it's published" — without needing one combined boolean expression to express both halves.
 
 **Why published apps are publicly readable:** this is the database-layer version of a rule the local-only build already established — `/app/[appId]` is meant to be a link anyone can open, not just the app's owner, the same way `RuntimeRoot.tsx` already renders straight from storage with no ownership check today. Once real persistence is connected, an anonymous (logged-out) visitor still has to be able to `select` a published app's row for that page to keep working for non-owners — hence a policy with no `auth.uid()` check at all, scoped only by `status`.
@@ -241,3 +251,88 @@ either BuilderRoot's preview mode or the public /app/[appId] route)
 A random `seed` query parameter is included on every request specifically so clicking "Regenerate" gets a new image rather than Pollinations returning an identical cached result for the same prompt.
 
 Chat Box does not call any external API; its "replies" are local keyword-matched canned text with an artificial delay — the one widget type still fully mocked, by design.
+
+## Authentication & Profile System
+
+Built with `@supabase/ssr`: a browser client (`src/lib/supabase/client.ts`, `createBrowserClient`) for everything in client components, and a server client (`src/lib/supabase/server.ts`, `createServerClient` against the async `cookies()` API) for `src/proxy.ts`'s session-refresh middleware. `proxy.ts` no-ops early if Supabase env vars are absent, so the app degrades to local-only rather than crashing when Supabase isn't configured.
+
+**Sign-up / login / logout** (`src/app/signup/page.tsx`, `src/app/login/page.tsx`, `Sidebar.tsx`) are standard `supabase.auth.signUp` / `signInWithPassword` / `signOut` calls. The one non-trivial piece is **post-auth routing**: both signup (when email confirmation is off and a session comes back immediately) and login call `getPostAuthRedirect(userId)` (`src/lib/profile.ts`), which loads the user's profile and sends them to `/profile-setup` if `display_name` is empty, or `/dashboard` otherwise — so a brand-new account is never dropped onto the dashboard without a name/avatar, and a returning user is never re-prompted.
+
+**Password reset** is two routes: `/forgot-password` calls `resetPasswordForEmail` and always shows the same success copy regardless of whether the email matched an account (avoiding an account-enumeration leak); `/reset-password` is the link's landing page — Supabase's browser client establishes a recovery session automatically from the URL fragment, the page calls `getUser()` to confirm that session exists (showing "Link expired" if not), then `updateUser({ password })` on submit, followed by the same `getPostAuthRedirect` routing as login.
+
+**Profile setup** (`src/app/profile-setup/page.tsx`) is a username field plus a fixed 8-emoji avatar grid (`src/lib/avatars.ts` — `avatar_index` is just an array index, so there's no image upload, no storage bucket, no new package). `saveProfile()` upserts into `profiles` rather than relying on the row always existing — see the RLS note below for why.
+
+**Identity display** (`src/lib/useIdentity.ts`) subscribes to `supabase.auth.onAuthStateChange` and layers a `profiles` fetch on top of the session: `displayNameFor()` resolves `display_name` → email prefix → `"Guest"`, used by `Greeting.tsx` (topbar) and `Sidebar.tsx` (identity block + avatar circle). The sidebar's avatar specifically branches on whether `identity.profile` is non-null (showing the chosen emoji) vs. null (a letter-fallback) — which is what initially masked the bug below as "the avatar/name picker doesn't work" rather than "this account has no profile row."
+
+**A real bug, found and fixed during manual testing:** `profiles` originally had no `insert` RLS policy — only the `handle_new_user()` `SECURITY DEFINER` trigger could create a row, and that trigger only fires `after insert on auth.users`, i.e. only for signups *after* the trigger was installed. Any account created earlier has zero rows in `profiles`. `saveProfile()` was a plain `UPDATE ... WHERE id = X`; against a non-existent row, Postgres/PostgREST returns success with zero rows affected and **no error** — a classic silent-no-op. The fix was two lines of policy plus a one-line query change: add an `insert` policy scoped to `auth.uid() = id`, and change `saveProfile()` from `.update()` to `.upsert()`. This is the kind of bug that's invisible in a code review of either file alone — it only shows up when you trace a specific account's full lifecycle against the schema's actual history.
+
+## Cloud vs. Local App Storage (`appStore.ts`)
+
+`src/lib/appStore.ts` is a thin, auth-aware facade in front of two backends with identical function signatures:
+
+- `src/lib/storage.ts` — the original Phase 5 `localStorage` implementation, **never modified**, only called.
+- `src/lib/cloudStorage.ts` — a new Supabase-backed implementation of the same seven operations (`listApps`, `getApp`, `createApp`, `saveApp`, `deleteApp`, `publishApp`, `duplicateApp`), mapping the `apps` table's snake_case rows to the existing camelCase `App` type so nothing downstream ever sees a raw row.
+
+Every `appStore.ts` function calls `supabase.auth.getSession()` (local, no network round-trip — appropriate here since this only decides which backend to use, not a security check) and dispatches: no session → `storage.ts`, session → `cloudStorage.ts` for that `user_id`. Because the local branch calls the exact same functions that ran before Phase 6, logged-out behavior is structurally guaranteed not to regress, not just carefully preserved by hand. `cloudStorage.ts` also mirrors `storage.ts`'s publish/draft-revert rule (editing a published app demotes it back to draft) so the two backends stay behaviorally identical, not just API-identical.
+
+**Local-to-cloud import** (`getLocalAppsPendingImport`, `importLocalApps` in `appStore.ts`; `importApp` in `cloudStorage.ts`): after login, any local app whose `id` isn't yet present in the user's cloud apps is offered via a one-time banner on My Apps (`ImportLocalAppsBanner.tsx`). Import reuses the local app's existing UUID and original timestamps — a copy, not a fresh creation — which also makes a second import attempt naturally idempotent (the primary key collision rejects the duplicate insert rather than creating a second copy). Declining or dismissing the banner never deletes anything locally; the app simply stays in `localStorage` and gets re-offered on a future login.
+
+## Diagrams
+
+### System architecture
+
+```mermaid
+flowchart LR
+    User([User]) --> FE[Next.js Frontend]
+    FE --> Auth[Supabase Auth]
+    FE --> DB[(Supabase Database<br/>profiles, apps)]
+    FE -->|"logged out"| LS[(Browser localStorage)]
+    FE --> TextRoute["/api/generate-text"]
+    FE --> ImageRoute["/api/generate-image"]
+    TextRoute --> Gemini[Google Gemini API]
+    ImageRoute --> Pollinations[Pollinations.ai]
+```
+
+### Builder flow
+
+```mermaid
+flowchart LR
+    A[Create App] --> B[Add Widgets]
+    B --> C[Configure Properties]
+    C --> D[Reference Inputs]
+    D --> E[Preview]
+    E --> F[Publish]
+```
+
+### Data persistence
+
+```mermaid
+flowchart TD
+    U([User]) --> LoggedIn{Logged in?}
+    LoggedIn -->|No| LS[(localStorage)]
+    LoggedIn -->|Yes| SB[(Supabase apps table)]
+    LS -->|on login, if local apps exist| Prompt[Import prompt banner]
+    Prompt -->|Import apps| SB
+    Prompt -->|Not now| LS
+```
+
+### AI generation flow
+
+```mermaid
+flowchart LR
+    subgraph Text Generation
+        UI1[User Input] --> PR1[Prompt Resolver] --> API1["/api/generate-text"] --> Gemini[Gemini] --> OUT1[Text Output]
+    end
+    subgraph Image Generation
+        UI2[User Input] --> PR2[Image Prompt Resolver] --> API2["/api/generate-image"] --> Poll[Pollinations] --> OUT2[Image Output]
+    end
+```
+
+### Publish lifecycle
+
+```mermaid
+flowchart LR
+    Draft -->|Publish| Published
+    Published -->|Edit published app| BackToDraft[Back to Draft]
+    BackToDraft -->|Republish| Published
+```

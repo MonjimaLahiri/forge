@@ -26,6 +26,15 @@ From the first AI integration, "no API key configured" or "the provider failed" 
 ### Publish state as a live promise, not a one-way flag
 Early on, "Publish" only ever moved an app from Drafts to Published — nothing moved it back, so editing a published app silently left a stale "Published" label on something whose live content no longer matched what publishing implied. For a non-technical user, "Published" should mean "what's at this link is what I built" at all times, not "I clicked Publish once." The fix treats every edit to a published app as invalidating that promise: it reverts to Draft automatically, and the public page says plainly "This app is not currently published" rather than quietly serving something that drifted from what was published.
 
+### Forcing a profile-setup step instead of letting "Alex" linger
+The mock builder shipped with a hardcoded greeting ("Hello, Alex!") long enough that real auth almost slotted in underneath it without anyone noticing the name never changed — login worked, but the UI kept lying about who was using it. Rather than just swapping in the email address (technically correct, but exactly the kind of exposed-implementation-detail the product brief says to avoid), a mandatory `/profile-setup` step was added: pick a username and an avatar before you ever see the dashboard. This mirrors the no-technical-exposure principle from the builder itself — a raw email prefix is no more "non-technical-friendly" than a JSON id would be.
+
+### Avatars as a fixed picker, not an upload
+A profile picture sounds like it needs file upload, image storage, and a CDN. For this product's actual need — "let a user feel like *themselves* in the sidebar" — eight fixed emoji presets stored as a single integer column do the same job with zero new infrastructure, zero new packages, and zero privacy/moderation surface. This is the same "cut to what the task actually needs" instinct as skipping React Flow for the canvas.
+
+### Same outcome message regardless of account existence
+The forgot-password flow shows "If an account exists, reset instructions have been sent" whether or not the email actually matches an account. The alternative (a clear "no account with that email" error) is marginally friendlier but lets anyone enumerate which emails have accounts — a small UX cost traded deliberately for not leaking that information, the standard pattern for this kind of flow.
+
 ## Trade-offs
 
 ### Phased delivery over a big-bang build
@@ -49,6 +58,15 @@ Once a public `/app/[appId]` route was needed, the obvious risk was ending up wi
 ### Centralizing the publish/draft revert in one function
 The fix for stale "Published" labels could have been implemented at each edit site (builder autosave, Reset button, My Apps rename) — three places independently checking "was this published? demote it." Instead it lives once, inside `saveApp`, the single function all three already call. This works because every call site already only invokes `saveApp` on a genuine change (the autosave effect diffs serialized state first; rename bails out on a no-op), so unconditionally demoting inside `saveApp` is correct without adding a second "did anything really change" check anywhere.
 
+### A facade instead of an "if logged in" check scattered everywhere
+Connecting Supabase could have meant adding `if (loggedIn) { ... } else { ... }` branches inside every component that touches app storage — four call sites, each one a chance to get the branch wrong. Instead, `appStore.ts` exposes the exact same function names `storage.ts` already had, async, and does the branching once per call internally. Every call site changed by exactly one import line plus an `await`. This also made the "don't break logged-out behavior" requirement structural rather than a promise to be careful: the logged-out branch calls the literal, unmodified `storage.ts` functions, so there's no code path where Phase 6 work can regress Phase 5 behavior.
+
+### Copy-on-import instead of move-on-import
+When a user with existing local apps logs in for the first time, the tempting simpler design is "move local apps to the cloud and clear localStorage." That's also the design most likely to silently lose someone's work if a single insert fails partway through a batch. Importing copies each app (keeping its original id, so a retry can't double-import) and never touches the local copy — even a total failure leaves the user exactly where they started, just still prompted next time.
+
+### Row Level Security as the actual security boundary, not the anon key
+Supabase's anon key is shipped to the browser (`NEXT_PUBLIC_SUPABASE_ANON_KEY`) by design — it authenticates as "this is a request from this app," not "this is an authorized user." The real access control lives entirely in Postgres RLS policies (`auth.uid() = id` / `auth.uid() = user_id`), checked server-side on every query regardless of what the client sends. This is a different mental model from a typical REST API with a secret bearer token, and it's why the published-apps policy (`status = 'published'`, no ownership check) is what makes `/app/[appId]` work for anonymous visitors — there's no special "public" client, just a second permissive policy that Postgres unions with the owner-only one.
+
 ## Outcome
 
 **Gemini's free-tier quota was unpredictable per-model, for both text and images.** For text, the first working key authenticated successfully but returned `RESOURCE_EXHAUSTED` on `gemini-2.0-flash`; the fix was a small ordered fallback chain across three models, advancing on any failure. For images, the same diagnostic instinct — test directly against the live API rather than assume — revealed something more fundamental: every Gemini image model had zero free-tier quota, full stop, which a fallback chain across Gemini models alone couldn't fix. Recognizing that distinction (a per-model quirk vs. a category-wide paid wall) was what led to pivoting providers entirely rather than just adding more retries.
@@ -63,10 +81,15 @@ The fix for stale "Published" labels could have been implemented at each edit si
 
 The throughline across all of this is sequencing: ship the smallest version of each capability that proves the UX works, name the resulting gap explicitly instead of papering over it, and keep each step's blast radius small by being precise about what it does *not* include. That discipline is also what made it safe to swap an entire AI provider (Pollinations for Gemini images) and fix a cross-cutting status bug (publish/draft correctness) in the same project without re-litigating earlier layers — the storage rewrite never touched the AI routes, and the new image provider never touched the publish logic.
 
+**A real bug that only showed up against a specific account's history, not in code review.** Profile saves appeared to work in every code path inspected in isolation — the form submitted correctly, the Supabase update call had no syntax issues, RLS policies were correctly scoped, and a direct API test against a freshly-created test account round-tripped perfectly. The actual bug only existed for accounts created *before* the schema migration that added the profile-creation trigger — a timing gap between "when this user signed up" and "when this database rule started existing," invisible unless you trace one specific account's lifecycle against the schema's own history rather than just testing the current code against a current account. The fix (an `insert` RLS policy plus an `upsert` instead of an `update`) was small, but finding it required ruling out simpler theories first (browser caching, stale client state, RLS misconfiguration) by testing each directly rather than guessing.
+
+**Auth/database work landed without breaking the thing it sits on top of.** The explicit constraint going into Phase 6 was: don't change AI generation, don't change builder behavior, keep logged-out users fully functional. The facade pattern (`appStore.ts` calling unmodified `storage.ts` for logged-out users) made that a structural guarantee rather than a careful-editing promise — there was no code path through which adding Supabase could regress the Phase 5 local experience, short of breaking the dispatcher's branching logic itself, which was independently testable.
+
 ## Future Improvements
 
-- The backend phase (Supabase, real auth, real hosting) is the obvious next move — `localStorage` has done its job of letting the product surface get validated cheaply, but it's the ceiling now, not a stepping stone to optimize further.
+- Real hosting/CDN for published apps regardless of auth state — cloud-stored published apps already resolve from any browser; local-only published apps (created while logged out) are still the one case still tied to a single browser's `localStorage`.
 - Replace Pollinations.ai with a more durable, accountable image provider once this needs to handle real (non-demo) user prompts — the free/keyless trade-off was right for proving the feature, not for a product with real users.
 - Wire Discover's "Use template" into actually cloning a template's widgets, now that `duplicateApp`-style logic already exists and could be reused.
 - Surface "unpublished changes" more gracefully than a binary draft/published flip — e.g., a "republish" prompt that shows what changed, rather than silently demoting and requiring the user to notice and re-publish.
-- Once there's a real backend, revisit whether the canvas needs React Flow — multi-app management didn't end up requiring it, but real collaboration or cross-app connections might.
+- Add social/OAuth login options now that email/password auth has proven out the profile-completion and redirect logic.
+- Revisit whether the canvas needs React Flow — multi-app management and now auth/persistence didn't end up requiring it, but real collaboration or cross-app connections might.
