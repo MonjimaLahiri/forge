@@ -114,6 +114,24 @@ Two surfaces read `status` and need no separate logic to stay correct:
 - **My Apps** filters `listApps()` into Drafts/Published purely by `status` — an app demoted by `saveApp` moves sections on the very next read.
 - **`/app/[appId]`** (`RuntimeRoot.tsx`) checks `app.status === 'published'` before rendering. If the app exists but isn't published (either never published, or demoted by a later edit), it shows "This app is not currently published." with a link back to `/builder/[appId]`, instead of silently serving a stale runtime view.
 
+## Supabase Schema (Phase 6.3 — not yet connected)
+
+The full SQL lives in [`docs/supabase-schema.sql`](supabase-schema.sql), meant to be run once in the Supabase Dashboard's SQL Editor. As of this phase, nothing in the app calls these tables — the builder and My Apps still read/write `localStorage` exclusively, exactly as described above. This is schema-and-policy groundwork for a later phase that actually wires up persistence.
+
+**Schema:** two tables, deliberately mirroring shapes that already exist in code rather than inventing a new model:
+- `profiles` mirrors the identity half of `MockUser` — `id` (same uuid as the Supabase auth user, not a separate generated id), `display_name`, `avatar_index`, `created_at`. One row per user, created automatically (see trigger below), never inserted by the user directly.
+- `apps` mirrors `App` from `lib/types.ts` almost field-for-field — `status` is constrained to `'draft' | 'published'` via a `check` constraint, the same two states the local version uses. `widgets` stays one `jsonb` column rather than a normalized table, because Forge never queries into individual widgets — they're only ever read/written as one full array per app, both locally and (eventually) remotely, so normalizing would add joins for no benefit.
+
+**RLS strategy:** both tables have Row Level Security enabled, with narrow, single-purpose policies rather than one broad rule per table:
+- `profiles`: `select`/`update` are restricted to `auth.uid() = id`. There's intentionally no `insert` policy — profile rows only ever come from the `handle_new_user()` trigger, which runs as `SECURITY DEFINER` and bypasses RLS entirely, since a brand-new user has no rows (and therefore no RLS grant) yet to authorize an insert against.
+- `apps`: four ownership policies (`select`/`insert`/`update`/`delete`, all keyed on `auth.uid() = user_id`), plus one additional `select` policy with no ownership check at all: `using (status = 'published')`. Postgres unions multiple permissive policies for the same command with `OR`, so the effective read rule becomes "you can see a row if you own it, **or** if it's published" — without needing one combined boolean expression to express both halves.
+
+**Why published apps are publicly readable:** this is the database-layer version of a rule the local-only build already established — `/app/[appId]` is meant to be a link anyone can open, not just the app's owner, the same way `RuntimeRoot.tsx` already renders straight from storage with no ownership check today. Once real persistence is connected, an anonymous (logged-out) visitor still has to be able to `select` a published app's row for that page to keep working for non-owners — hence a policy with no `auth.uid()` check at all, scoped only by `status`.
+
+**Why drafts stay private:** a draft is work in progress — exposing it would let anyone who discovers or guesses an app's UUID read its prompts, widget configuration, and content before the owner ever chose to publish. Restricting `select` to `auth.uid() = user_id` for everything that isn't `published` preserves the exact "draft = private, published = public" boundary the local `saveApp`/`publishApp` behavior already enforces — just expressed as a database policy instead of an `if` statement.
+
+One gap worth naming rather than hiding: this schema has no trigger replicating `saveApp`'s "editing a published app reverts it to draft" rule (see Publish & Draft Behavior above). That logic lives in application code locally; whichever code eventually writes to this table will need to either reimplement it as a Postgres trigger or keep enforcing it at the application layer, the same way `storage.ts` does today.
+
 ## Builder Canvas
 
 The canvas is a `position: relative` container; each widget is a `position: absolute` `<div>` placed at `widget.x, widget.y`. Dragging is implemented with three handlers wired to the canvas container:

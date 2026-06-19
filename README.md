@@ -6,7 +6,7 @@
 
 ## Live Demo
 
-> _Placeholder — add a deployed URL here once real hosting (backend phase) lands. Until then, run it locally via Setup Instructions below._
+> https://forge-ai-builder.vercel.app/dashboard
 
 ---
 
