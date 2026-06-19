@@ -37,9 +37,15 @@ create policy "Users can update their own profile"
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
--- Deliberately no INSERT policy here: profile rows are only ever created by
--- handle_new_user() below, which runs as SECURITY DEFINER and bypasses RLS.
--- A user never inserts their own profile row directly.
+-- INSERT policy: normally profile rows are created by handle_new_user() below
+-- (SECURITY DEFINER, bypasses RLS) at signup. This policy exists only as a
+-- backfill path for accounts created before that trigger existed — saveProfile()
+-- upserts, so a user with a missing row can still create their own (and only
+-- their own) profile row instead of every save silently no-op'ing.
+drop policy if exists "Users can insert their own profile" on public.profiles;
+create policy "Users can insert their own profile"
+  on public.profiles for insert
+  with check (auth.uid() = id);
 
 
 -- -----------------------------------------------------------------------------

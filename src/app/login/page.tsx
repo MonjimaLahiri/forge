@@ -4,7 +4,9 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { getPostAuthRedirect } from '@/lib/profile';
 import Button from '@/components/ui/Button';
+import PasswordInput from '@/components/ui/PasswordInput';
 
 const INPUT_STYLE =
   'w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-[#f0f0f0] ' +
@@ -21,9 +23,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getUser().then(({ data }) => {
+    supabase.auth.getUser().then(async ({ data }) => {
       if (data.user) {
-        router.replace('/dashboard');
+        router.replace(await getPostAuthRedirect(data.user.id));
       } else {
         setCheckingSession(false);
       }
@@ -36,7 +38,7 @@ export default function LoginPage() {
     setLoading(true);
 
     const supabase = createClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
 
     if (signInError) {
       setError(signInError.message);
@@ -44,7 +46,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push('/dashboard');
+    router.push(await getPostAuthRedirect(data.user.id));
   }
 
   if (checkingSession) return null;
@@ -77,15 +79,21 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label htmlFor="password" className={LABEL_STYLE}>Password</label>
-              <input
+              <div className="flex items-center justify-between mb-1.5">
+                <label htmlFor="password" className="text-xs font-medium text-[#9ca3af]">Password</label>
+                <Link
+                  href="/forgot-password"
+                  className="text-xs font-medium text-[#1a73e8] hover:text-[#4a9ef8] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#1a73e8] rounded"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+              <PasswordInput
                 id="password"
-                type="password"
                 autoComplete="current-password"
                 required
                 value={password}
-                onChange={e => setPassword(e.target.value)}
-                className={INPUT_STYLE}
+                onChange={setPassword}
               />
             </div>
 

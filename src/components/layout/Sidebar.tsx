@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import type { User } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
+import { useIdentity, displayNameFor } from '@/lib/useIdentity';
+import { getAvatar } from '@/lib/avatars';
 
 const NAV_ITEMS = [
   {
@@ -77,17 +77,8 @@ const AUTH_ICON = (
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-
-  useEffect(() => {
-    const supabase = createClient();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setAuthLoading(false);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
+  const identity = useIdentity();
+  const { loading: authLoading, loggedIn } = identity;
 
   async function handleLogout() {
     const supabase = createClient();
@@ -152,7 +143,7 @@ export default function Sidebar() {
         ))}
 
         {!authLoading && (
-          user ? (
+          loggedIn ? (
             <button
               type="button"
               onClick={handleLogout}
@@ -175,16 +166,25 @@ export default function Sidebar() {
 
       {/* User identity */}
       <div className="px-4 py-3 border-t border-[#2a2a2a]">
-        {!authLoading && user ? (
+        {!authLoading && loggedIn ? (
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-[#1a73e8]/20 flex items-center justify-center shrink-0">
-              <span className="text-xs font-semibold text-[#1a73e8]">
-                {(user.email ?? '?')[0].toUpperCase()}
-              </span>
-            </div>
+            {identity.profile ? (
+              <div
+                className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm"
+                style={{ backgroundColor: getAvatar(identity.profile.avatarIndex).bg }}
+              >
+                {getAvatar(identity.profile.avatarIndex).emoji}
+              </div>
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-[#1a73e8]/20 flex items-center justify-center shrink-0">
+                <span className="text-xs font-semibold text-[#1a73e8]">
+                  {displayNameFor(identity)[0]?.toUpperCase()}
+                </span>
+              </div>
+            )}
             <div className="min-w-0">
-              <p className="text-sm font-medium text-[#f0f0f0] truncate">{user.email}</p>
-              <p className="text-xs text-[#6b7280] truncate">Signed in</p>
+              <p className="text-sm font-medium text-[#f0f0f0] truncate">{displayNameFor(identity)}</p>
+              <p className="text-xs text-[#6b7280] truncate">{identity.email}</p>
             </div>
           </div>
         ) : !authLoading ? (
@@ -196,7 +196,7 @@ export default function Sidebar() {
               </svg>
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-medium text-[#9ca3af] truncate">Not signed in</p>
+              <p className="text-sm font-medium text-[#9ca3af] truncate">Guest</p>
               <Link href="/login" className="text-xs text-[#1a73e8] hover:text-[#4a9ef8] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#1a73e8] rounded">
                 Log in
               </Link>

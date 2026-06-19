@@ -1,4 +1,5 @@
 import AppShell from '@/components/layout/AppShell';
+import Greeting from '@/components/layout/Greeting';
 import Button from '@/components/ui/Button';
 import DiscoverClient from './DiscoverClient';
 import { MOCK_TEMPLATES } from '@/lib/mock-data';
@@ -12,7 +13,7 @@ const PlusIcon = () => (
 export default function DiscoverPage() {
   const topBar = (
     <>
-      <h1 className="text-xl font-semibold text-[#f0f0f0]">Hello, Alex!</h1>
+      <Greeting />
       <Button href="/builder/new"><PlusIcon />Create New</Button>
     </>
   );

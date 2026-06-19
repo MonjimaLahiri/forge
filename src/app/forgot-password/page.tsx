@@ -1,67 +1,34 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
-import { getPostAuthRedirect } from '@/lib/profile';
 import Button from '@/components/ui/Button';
-import PasswordInput from '@/components/ui/PasswordInput';
 
 const INPUT_STYLE =
   'w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-[#f0f0f0] ' +
   'placeholder-[#4b5563] focus:outline-none focus:border-[#1a73e8] transition-colors';
 const LABEL_STYLE = 'block text-xs font-medium text-[#9ca3af] mb-1.5';
 
-export default function SignupPage() {
-  const router = useRouter();
+export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [checkingSession, setCheckingSession] = useState(true);
-  const [confirmationSent, setConfirmationSent] = useState(false);
-
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data }) => {
-      if (data.user) {
-        router.replace(await getPostAuthRedirect(data.user.id));
-      } else {
-        setCheckingSession(false);
-      }
-    });
-  }, [router]);
+  const [sent, setSent] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setError('');
     setLoading(true);
 
     const supabase = createClient();
-    const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
+    // Always show the same outcome regardless of whether the email exists —
+    // confirming/denying an account's existence here would be a privacy leak.
+    await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
 
-    if (signUpError) {
-      setError(signUpError.message);
-      setLoading(false);
-      return;
-    }
-
-    if (data.session && data.user) {
-      // Email confirmation is off for this project — the account is active
-      // immediately. A brand-new profile never has a display_name yet, so
-      // this always lands on /profile-setup — getPostAuthRedirect confirms
-      // that rather than assuming it.
-      router.push(await getPostAuthRedirect(data.user.id));
-      return;
-    }
-
-    // Email confirmation is on — there's no session yet until the user clicks the link.
-    setConfirmationSent(true);
+    setSent(true);
     setLoading(false);
   }
-
-  if (checkingSession) return null;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0d0d0d] px-4">
@@ -73,7 +40,7 @@ export default function SignupPage() {
         </Link>
 
         <div className="mt-8 bg-[#161616] border border-[#2a2a2a] rounded-2xl p-8">
-          {confirmationSent ? (
+          {sent ? (
             <div className="flex flex-col items-center gap-4 text-center">
               <div className="w-12 h-12 rounded-full bg-[#22c55e]/15 flex items-center justify-center">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -84,7 +51,7 @@ export default function SignupPage() {
               <div>
                 <h1 className="text-lg font-semibold text-[#f0f0f0]">Check your email</h1>
                 <p className="mt-2 text-sm text-[#6b7280] leading-relaxed">
-                  We sent a confirmation link to <span className="text-[#d1d5db]">{email}</span>. Click it to activate your account, then log in.
+                  If an account exists, reset instructions have been sent.
                 </p>
               </div>
               <Link
@@ -96,8 +63,8 @@ export default function SignupPage() {
             </div>
           ) : (
             <>
-              <h1 className="text-lg font-semibold text-[#f0f0f0]">Create an account</h1>
-              <p className="mt-1 text-sm text-[#6b7280]">Save your apps to the cloud and access them anywhere.</p>
+              <h1 className="text-lg font-semibold text-[#f0f0f0]">Forgot password</h1>
+              <p className="mt-1 text-sm text-[#6b7280]">Enter your email and we&apos;ll send reset instructions.</p>
 
               <form onSubmit={handleSubmit} className="mt-6 space-y-4">
                 <div>
@@ -108,39 +75,19 @@ export default function SignupPage() {
                     autoComplete="email"
                     required
                     value={email}
-                    onChange={e => setEmail(e.target.value)}
+                    onChange={(e) => setEmail(e.target.value)}
                     className={INPUT_STYLE}
                   />
                 </div>
 
-                <div>
-                  <label htmlFor="password" className={LABEL_STYLE}>Password</label>
-                  <PasswordInput
-                    id="password"
-                    autoComplete="new-password"
-                    required
-                    minLength={6}
-                    value={password}
-                    onChange={setPassword}
-                  />
-                  <p className="mt-1.5 text-xs text-[#4b5563]">At least 6 characters.</p>
-                </div>
-
-                {error && (
-                  <div role="alert" className="rounded-lg bg-[#7f1d1d]/20 border border-[#7f1d1d]/40 px-3 py-2">
-                    <p className="text-xs text-[#fca5a5] leading-snug">{error}</p>
-                  </div>
-                )}
-
                 <Button type="submit" disabled={loading} className="w-full">
-                  {loading ? 'Creating account…' : 'Create account'}
+                  {loading ? 'Sending…' : 'Send reset instructions'}
                 </Button>
               </form>
 
               <p className="mt-6 text-sm text-[#6b7280] text-center">
-                Already have an account?{' '}
                 <Link href="/login" className="text-[#1a73e8] hover:text-[#4a9ef8] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a73e8] rounded">
-                  Log in
+                  Back to log in
                 </Link>
               </p>
             </>
